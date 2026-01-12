@@ -1147,13 +1147,42 @@ void CodeGenTileLangNPUIRDEV::VselectCodegen(const CallNode *op) {
       }
       return {offsets, sizes, strides};
     };
-  // gen mlir::hivm::VSelOp
-  auto broadcastDim = getBroadcastDim(npuirop.src0->shape, npuirop.dst->shape);
-  auto selOp = builder.create<mlir::hivm::VSelOp>(
-      builder.getUnknownLoc(), mlir::TypeRange{},
-      mlir::ValueRange{cond_data_name, src0_data_name, src1_data_name},
-      mlir::ValueRange{dst_data_name}, mlir::Value());
-  selOp->setAttr("broadcast", builder.getDenseI64ArrayAttr(broadcastDim));
+    
+  auto createCastIfTypeMismatch = [&](mlir::Value src_value, mlir::Value dst_value) -> mlir::Value {
+    auto src_type = src_value.getType();
+    auto dst_type = dst_value.getType();
+    
+    // Get src and dst ElementType
+    mlir::Type src_element_type, dst_element_type;
+    if (auto src_tensor_type = src_type.dyn_cast<mlir::TensorType>()) {
+      src_element_type = src_tensor_type.getElementType();
+    } else if (auto src_memref_type = src_type.dyn_cast<mlir::MemRefType>()) {
+      src_element_type = src_memref_type.getElementType();
+    } else {
+      return src_value;
+    }
+    if (auto dst_tensor_type = dst_type.dyn_cast<mlir::TensorType>()) {
+      dst_element_type = dst_tensor_type.getElementType();
+    } else if (auto dst_memref_type = dst_type.dyn_cast<mlir::MemRefType>()) {
+      dst_element_type = dst_memref_type.getElementType();
+    } else {
+      return src_value;
+    }
+    // No cast if ElementType are the same
+    if (src_element_type == dst_element_type) {
+      return src_value;
+    }
+
+    // Get src tensor shape
+    llvm::ArrayRef<int64_t> src_shape;
+    if (auto src_tensor_type = src_type.dyn_cast<mlir::RankedTensorType>()) {
+      src_shape = src_tensor_type.getShape();
+    } else if (auto src_memref_type = src_type.dyn_cast<mlir::MemRefType>()) {
+      src_shape = src_memref_type.getShape();
+    } else {
+      return src_value;
+    }
+    
 }
 
 void CodeGenTileLangNPUIRDEV::VbrcCodegen(const CallNode *op) {
