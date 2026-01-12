@@ -1120,10 +1120,33 @@ void CodeGenTileLangNPUIRDEV::VselectCodegen(const CallNode *op) {
 
   tvm::tl::NpuirSelect npuirop(op->args, this->vmap);
   // gen memref.subview
-  auto cond_data_name = GenSubviewFromRegion(npuirop.cond, npuirop.cond_range);
-  auto src0_data_name = GenSubviewFromRegion(npuirop.src0, npuirop.src0_range);
-  auto src1_data_name = GenSubviewFromRegion(npuirop.src1, npuirop.src1_range);
-  auto dst_data_name = GenSubviewFromRegion(npuirop.dst, npuirop.dst_range);
+  auto createOpFoldResultArray = [&](const Array<Range>& range) 
+      -> std::tuple<SmallVector<OpFoldResult>, 
+                    SmallVector<OpFoldResult>, 
+                    SmallVector<OpFoldResult>> {
+    SmallVector<OpFoldResult> offsets;
+    SmallVector<OpFoldResult> sizes;
+    SmallVector<OpFoldResult> strides;
+    for (const auto& r : range) {
+      // offset
+      if (auto offset_int = as_const_int(r->min)) {
+        offsets.push_back(builder.getI64IntegerAttr(*offset_int));
+      } else {
+        mlir::Value offsetVal = CreateIndexCastOp(MakeValue(r->min));
+        offsets.push_back(offsetVal);
+      }
+      // size
+      if (auto size_int = as_const_int(r->extent)) {
+        sizes.push_back(builder.getI64IntegerAttr(*size_int));
+      } else {
+        mlir::Value sizeVal = CreateIndexCastOp(MakeValue(r->extent));
+        sizes.push_back(sizeVal);
+      }
+      // stride (usually is 1)
+      strides.push_back(builder.getI64IntegerAttr(1));
+      }
+      return {offsets, sizes, strides};
+    };
   // gen mlir::hivm::VSelOp
   auto broadcastDim = getBroadcastDim(npuirop.src0->shape, npuirop.dst->shape);
   auto selOp = builder.create<mlir::hivm::VSelOp>(
