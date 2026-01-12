@@ -1182,6 +1182,24 @@ void CodeGenTileLangNPUIRDEV::VselectCodegen(const CallNode *op) {
     } else {
       return src_value;
     }
+    // Create VCastOp
+    auto castDstTensor = builder.create<mlir::tensor::EmptyOp>(
+        builder.getUnknownLoc(), src_shape, dst_element_type);
+    mlir::Type dst_type_ = castDstTensor.getType();
+    mlir::TypeRange result_tensors(&dst_type_, 1);
+    mlir::hivm::RoundMode mode = mlir::hivm::RoundMode::RINT;
+    auto newCastOp = builder.create<mlir::hivm::VCastOp>(
+        builder.getUnknownLoc(), result_tensors, src_value, 
+        castDstTensor.getResult(), mlir::hivm::RoundModeAttr::get(&context, mode),
+        nullptr);
+    return newCastOp->getResult(0);
+  };
+  
+  mlir::Value cond_data_name = GetVarValue(npuirop.cond);
+  mlir::Value src0_data_name = GetVarValue(npuirop.src0);
+  mlir::Value src1_data_name = GetVarValue(npuirop.src1);
+  mlir::Value dst_data_name = GetVarValue(npuirop.dst);
+
     
 }
 
