@@ -1110,11 +1110,14 @@ void CodeGenTileLangNPUIRDEV::VselectCodegen(const CallNode *op) {
   /// before:
   ///   T.npuir_select(Cond_VEC, A_VEC, B_VEC, C_VEC)
   /// after:
-  ///   hivm.hir.vsel ins(%v__9, %A_VEC, %B_VEC : memref<32x64xi1, strided<[64,
-  ///   1], offset:0>, #hivm.address_space<ub>>, memref<32x64xf16, strided<[64,
-  ///   1], offset:0>, #hivm.address_space<ub>>, memref<32x64xf16, strided<[64,
-  ///   1], offset:0>, #hivm.address_space<ub>>) outs(%C_VEC : memref<32x64xf16,
-  ///   strided<[64, 1], offset:0>, #hivm.address_space<ub>>)
+  ///  %8 = tensor.empty() : tensor<32xf16>
+  ///  %9 = hivm.hir.vsel ins(%Cond_VEC, %A_VEC, %B_VEC : tensor<32xi1>, tensor<32xf16>, tensor<32xf16>) outs(%8 : tensor<32xf16>) -> tensor<32xf16>
+  ///  %c1 = arith.constant 1 : index
+  ///  %c32 = arith.constant 32 : index
+  ///  %from_elements = tensor.from_elements %c1, %c32 : tensor<2xindex>
+  ///  %reshape = tensor.reshape %9(%from_elements) : (tensor<32xf16>, tensor<2xindex>) -> tensor<1x32xf16>
+  ///  %inserted_slice = tensor.insert_slice %reshape into %C_VEC[%7, 0] [1, 32] [1, 1] : tensor<1x32xf16> into tensor<8x32xf16>
+
   tvm::tl::NpuirSelect npuirop(op->args, this->vmap);
   // gen memref.subview
   auto cond_data_name = GenSubviewFromRegion(npuirop.cond, npuirop.cond_range);
