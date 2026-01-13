@@ -207,6 +207,52 @@ static std::map<std::string, mlir::hivm::DeinterleaveMode>
         {"ALL_CHANNELS", mlir::hivm::DeinterleaveMode::ALL_CHANNELS},
     };
 
+static llvm::SmallVector<int64_t>
+getBroadcastDim(const Array<PrimExpr> &buffer_shape0,
+                const std::vector<int64_t> &buffer_shape1) {
+  llvm::SmallVector<int64_t> dims;
+
+  if (buffer_shape0.empty() || buffer_shape1.empty()) {
+    return dims;
+  }
+
+  int64_t rank0 = buffer_shape0.size();
+  int64_t rank1 = buffer_shape1.size();
+  int64_t outRank = std::max(rank0, rank1);
+
+  // i: 输出维度索引（从左到右）
+  for (int64_t i = 0; i < outRank; ++i) {
+    // 对应到 input 的 index（右对齐）
+    int64_t idx0 = i - (outRank - rank0);
+    int64_t idx1 = i - (outRank - rank1);
+
+    int64_t dim0 = 1;
+    int64_t dim1 = 1;
+
+    if (idx0 >= 0) {
+      const int64_t* v0 = as_const_int(buffer_shape0[idx0]);
+      CHECK(v0) << "buffer_shape0 must be constant int";
+      dim0 = *v0;
+    }
+
+    if (idx1 >= 0) {
+      dim1 = buffer_shape1[idx1];
+    }
+
+    if (dim0 == 1 && dim1 != 1) {
+      dims.emplace_back(i);
+    } else if (dim0 != 1 && dim1 == 1) {
+      dims.emplace_back(i);
+    } else {
+      CHECK(dim0 == dim1)
+          << "Incompatible broadcast at axis " << i
+          << ": " << dim0 << " vs " << dim1;
+    }
+  }
+
+  return dims;
+}
+
 namespace {
   /// Infer function core type: aic, aiv, mix
   class InferFuncCoreType : public StmtExprVisitor {
@@ -1119,7 +1165,8 @@ void CodeGenTileLangNPUIRDEV::VselectCodegen(const CallNode *op) {
   ///  %inserted_slice = tensor.insert_slice %reshape into %C_VEC[%7, 0] [1, 32] [1, 1] : tensor<1x32xf16> into tensor<8x32xf16>
 
   tvm::tl::NpuirSelect npuirop(op->args, this->vmap);
-  // gen memref.subview
+
+    // Retrieve offests, sizes, and strides from Range
   auto createOpFoldResultArray = [&](const Array<Range>& range) 
       -> std::tuple<SmallVector<OpFoldResult>, 
                     SmallVector<OpFoldResult>, 
@@ -1147,8 +1194,8 @@ void CodeGenTileLangNPUIRDEV::VselectCodegen(const CallNode *op) {
       }
       return {offsets, sizes, strides};
     };
-    
-  auto createCastIfTypeMismatch = [&](mlir::Value src_value, mlir::Value dst_value) -> mlir::Value {
+
+    auto createCastIfTypeMismatch = [&](mlir::Value src_value, mlir::Value dst_value) -> mlir::Value {
     auto src_type = src_value.getType();
     auto dst_type = dst_value.getType();
     
@@ -1172,7 +1219,7 @@ void CodeGenTileLangNPUIRDEV::VselectCodegen(const CallNode *op) {
     if (src_element_type == dst_element_type) {
       return src_value;
     }
-
+    
     // Get src tensor shape
     llvm::ArrayRef<int64_t> src_shape;
     if (auto src_tensor_type = src_type.dyn_cast<mlir::RankedTensorType>()) {
@@ -1182,6 +1229,7 @@ void CodeGenTileLangNPUIRDEV::VselectCodegen(const CallNode *op) {
     } else {
       return src_value;
     }
+    
     // Create VCastOp
     auto castDstTensor = builder.create<mlir::tensor::EmptyOp>(
         builder.getUnknownLoc(), src_shape, dst_element_type);
@@ -1200,7 +1248,111 @@ void CodeGenTileLangNPUIRDEV::VselectCodegen(const CallNode *op) {
   mlir::Value src1_data_name = GetVarValue(npuirop.src1);
   mlir::Value dst_data_name = GetVarValue(npuirop.dst);
 
+  // 只处理 tensor 场景
+  if (dst_data_name.getType().isa<mlir::TensorType>()) {
+
+    auto [dst_offsets, dst_sizes, dst_strides] =
+    createOpFoldResultArray(npuirop.dst_range);
+
+    auto srcTensorTy = src0_data_name.getType().cast<mlir::TensorType>();
+    auto elemTy = srcTensorTy.getElementType();
+
+    // elementwise shape 来自 src0
+    llvm::SmallVector<int64_t> elemShape(srcTensorTy.getShape().begin(),
+                                        srcTensorTy.getShape().end());
     
+    std::vector<int64_t> elemShapeVec(srcTensorTy.getShape().begin(),
+                                        srcTensorTy.getShape().end());
+
+    // auto zeroAttr = builder.getZeroAttr(elemTy);
+    auto zeroTensor = builder.create<mlir::tensor::EmptyOp>(
+        builder.getUnknownLoc(),
+        elemShape,
+        elemTy
+    );
+
+    auto broadcastDim = getBroadcastDim(npuirop.src0->shape, elemShapeVec);
+
+    auto selOp = builder.create<mlir::hivm::VSelOp>(
+        builder.getUnknownLoc(),
+        mlir::TypeRange{zeroTensor.getType()},
+        mlir::ValueRange{cond_data_name, src0_data_name, src1_data_name},
+        mlir::ValueRange{zeroTensor.getResult()},
+        mlir::Value() // buffer-style
+    );
+
+    selOp->setAttr("broadcast", builder.getDenseI64ArrayAttr(broadcastDim));
+
+    auto reshapeByDstSizes =
+      [&](mlir::Value srcTensor,
+          llvm::ArrayRef<mlir::OpFoldResult> dst_sizes) -> mlir::Value {
+
+    auto srcType =
+        srcTensor.getType().cast<mlir::RankedTensorType>();
+    mlir::Type elemTy = srcType.getElementType();
+    mlir::Location loc = builder.getUnknownLoc();
+
+    SmallVector<int64_t> targetShape;
+    for (auto s : dst_sizes) {
+      if (auto attr = s.dyn_cast<mlir::Attribute>()) {
+        targetShape.push_back(
+            attr.cast<mlir::IntegerAttr>().getInt());
+      } else {
+        ICHECK(false) << "tensor.reshape requires static dst_sizes";
+      }
+    }
+
+    if (srcType.hasStaticShape()) {
+      int64_t srcElems = srcType.getNumElements();
+      int64_t dstElems = 1;
+      for (auto d : targetShape)
+        dstElems *= d;
+
+      ICHECK(srcElems == dstElems)
+          << "Illegal reshape: element count mismatch: "
+          << srcElems << " vs " << dstElems;
+    }
+
+    SmallVector<mlir::Value> shapeVals;
+    for (int64_t d : targetShape) {
+      shapeVals.push_back(
+          builder.create<mlir::arith::ConstantIndexOp>(loc, d));
+    }
+
+    auto shapeTensorType =
+        mlir::RankedTensorType::get(
+            {(int64_t)shapeVals.size()},
+            builder.getIndexType());
+
+    mlir::Value shapeTensor =
+        builder.create<mlir::tensor::FromElementsOp>(
+            loc, shapeTensorType, shapeVals);
+
+    auto reshapedType =
+        mlir::RankedTensorType::get(targetShape, elemTy);
+
+    return builder
+        .create<mlir::tensor::ReshapeOp>(
+            loc, reshapedType, srcTensor, shapeTensor)
+        .getResult();
+  };
+
+    mlir::Value selOutput = selOp.getResult()[0];
+    mlir::Value reshaped_src = reshapeByDstSizes(selOutput, dst_sizes);
+    mlir::Value casted_src = createCastIfTypeMismatch(reshaped_src, dst_data_name);
+
+    auto result = builder.create<mlir::tensor::InsertSliceOp>(
+        builder.getUnknownLoc(),
+        reshaped_src,
+        dst_data_name,
+        dst_offsets,
+        dst_sizes,
+        dst_strides
+    );
+
+  SetVarValue(npuirop.dst, result.getResult());
+    return;
+  }
 }
 
 void CodeGenTileLangNPUIRDEV::VbrcCodegen(const CallNode *op) {
