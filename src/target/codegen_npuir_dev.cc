@@ -946,27 +946,43 @@ mlir::Value CodeGenTileLangNPUIRDEV::ConvertTensorToMemref(mlir::Value value) {
 
 // Type casting for mismatched element types
 mlir::Value CodeGenTileLangNPUIRDEV::CreateCastIfTypeMismatch(mlir::Value src, mlir::Value dst) {
-  mlir::Type src_elem_type = mlir::getElementTypeOrSelf(src.getType());
-  mlir::Type dst_elem_type = mlir::getElementTypeOrSelf(dst.getType());
+  // src is always a tensor, dst may be a tensor or a memref, the return value is always a tensor
 
-  if (src_elem_type == dst_elem_type) {
+  auto srcTensorTy = src.getType().cast<mlir::TensorType>(); 
+  assert(srcTensorTy && "src must be a tensor");
+
+  mlir::Type srcElemTy  = mlir::getElementTypeOrSelf(src.getType());
+  mlir::Type dstElemTy  = mlir::getElementTypeOrSelf(dst.getType());
+
+  if (srcElemTy  == dstElemTy ) {
     return src;
   }
 
-  auto src_shaped_type = src.getType().cast<mlir::ShapedType>();
-  auto castDstTensor = builder.create<mlir::tensor::EmptyOp>(
-    builder.getUnknownLoc(), src_shaped_type.getShape(), dst_elem_type);
+  auto resultTensorTy = mlir::RankedTensorType::get(
+      srcTensorTy.getShape(), dstElemTy);
   
-  mlir::Type dst_type_ = castDstTensor.getType();
-  mlir::TypeRange result_tensors(&dst_type_, 1);
+  auto loc = builder.getUnknownLoc();
+
+  SmallVector<mlir::Value> dynamicDims;
+  for (int64_t i = 0, rank = srcTensorTy.getRank(); i < rank; ++i) {
+    if (srcTensorTy.isDynamicDim(i)) {
+      dynamicDims.push_back(
+          builder.create<mlir::tensor::DimOp>(loc, src, i));
+    }
+  }
+
+  auto castDstTensor = builder.create<mlir::tensor::EmptyOp>(
+      loc, resultTensorTy, dynamicDims);
+  
   auto newCastOp = builder.create<mlir::hivm::VCastOp>(
-    builder.getUnknownLoc(), result_tensors, src, 
+    loc, resultTensorTy, src, 
     castDstTensor.getResult(), 
     mlir::hivm::RoundModeAttr::get(&context, mlir::hivm::RoundMode::RINT),
     nullptr);
       
   return newCastOp->getResult(0);
 }
+
 mlir::Value CodeGenTileLangNPUIRDEV::CreateCastIfTypeMismatch(mlir::Value src, mlir::Type dst_elem_type) {
   mlir::Type src_elem_type = mlir::getElementTypeOrSelf(src.getType());
 
