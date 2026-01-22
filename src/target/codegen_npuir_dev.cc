@@ -1237,6 +1237,31 @@ mlir::Value CodeGenTileLangNPUIRDEV::InsertSliceWithReshapeAndCast(
     dst_offsets, dst_sizes, dst_strides).getResult();
 }
 
+mlir::Value CodeGenTileLangNPUIRDEV::InsertSlice(
+    mlir::Value src_slice, 
+    mlir::Value dst_tensor, 
+    llvm::SmallVector<mlir::OpFoldResult>& dst_offsets,
+    llvm::SmallVector<mlir::OpFoldResult>& dst_sizes,
+    llvm::SmallVector<mlir::OpFoldResult>& dst_strides) {
+
+  auto loc = builder.getUnknownLoc();
+
+  // 确保 dst_tensor 是 RankedTensorType
+  auto dstTensorTy = dst_tensor.getType().dyn_cast<mlir::RankedTensorType>();
+  assert(dstTensorTy && "dst_tensor must be a ranked tensor");
+
+  auto insertOp = builder.create<mlir::tensor::InsertSliceOp>(
+      loc,
+      src_slice,
+      dst_tensor,
+      dst_offsets,
+      dst_sizes,
+      dst_strides
+  );
+
+  return insertOp.getResult();
+}
+
 void CodeGenTileLangNPUIRDEV::SmartMemRefCopy(mlir::Value src, mlir::Value dst) {
   auto src_type = src.getType().cast<mlir::MemRefType>();
   auto dst_type = dst.getType().cast<mlir::MemRefType>();
