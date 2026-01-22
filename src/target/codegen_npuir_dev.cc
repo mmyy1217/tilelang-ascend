@@ -1456,63 +1456,71 @@ void CodeGenTileLangNPUIRDEV::AscendCopyCodegen(const CallNode *op) {
   bool src_is_tensor = src.getType().isa<mlir::TensorType>();
   bool dst_is_tensor = dst.getType().isa<mlir::TensorType>();
 
-  auto create_local_ub = [&](llvm::ArrayRef<int64_t> shape, mlir::Type elem_type) -> mlir::Value {
+  // Helper 1: Static Alloc
+  auto create_static_local_ub = [&](llvm::ArrayRef<int64_t> shape, mlir::Type elem_type) -> mlir::Value {
       auto memrefType = mlir::MemRefType::get(shape, elem_type);
-      mlir::IntegerAttr alignmentAttr = builder.getI64IntegerAttr(64); // 64字节对齐
-      
+      mlir::IntegerAttr alignmentAttr = builder.getI64IntegerAttr(64); 
       auto allocOp = builder.create<mlir::memref::AllocOp>(
           loc, memrefType, mlir::ValueRange{}, mlir::ValueRange{}, alignmentAttr);
       return allocOp.getResult();
   };
 
+  // Helper 2: Dynamic Subview
+  auto create_dynamic_subview = [&](mlir::Value ub, llvm::ArrayRef<mlir::OpFoldResult> sizes) -> mlir::Value {
+      SmallVector<mlir::OpFoldResult> offsets(sizes.size(), builder.getIndexAttr(0));
+      SmallVector<mlir::OpFoldResult> strides(sizes.size(), builder.getIndexAttr(1));
+      return builder.create<mlir::memref::SubViewOp>(loc, ub, offsets, sizes, strides);
+  };
+
   // Case 1: Load (MemRef -> Tensor)
   if (src_is_memref && dst_is_tensor) {
+    // 1. Src View (Dynamic Shape: e.g. 4)
     mlir::Value src_view = builder.create<mlir::memref::SubViewOp>(
         loc, src, src_offs, src_sizes, src_strides);
 
-    auto src_view_type = src_view.getType().cast<mlir::MemRefType>();
-    mlir::Value temp_ub = create_local_ub(src_view_type.getShape(), src_view_type.getElementType());
+    // 2. Alloc UB (Static Shape: e.g. 32)
+    auto dst_tensor_type = dst.getType().cast<mlir::RankedTensorType>();
+    mlir::Value base_ub = create_static_local_ub(
+        dst_tensor_type.getShape(), dst_tensor_type.getElementType());
 
-    builder.create<mlir::memref::CopyOp>(loc, src_view, temp_ub);
+    // 3. Subview UB (Dynamic Shape: e.g. 4)
+    mlir::Value ub_view = create_dynamic_subview(base_ub, src_sizes);
 
+    // 4. Copy (Dynamic -> Dynamic)
+    builder.create<mlir::memref::CopyOp>(loc, src_view, ub_view);
+
+    // 5. To Tensor (Dynamic) -> tensor<?xf16>
     mlir::Value loaded_tensor = builder.create<mlir::bufferization::ToTensorOp>(
-        loc, temp_ub, /*restrict=*/true, /*writable=*/false);
+        loc, ub_view, /*restrict=*/true, /*writable=*/false);
 
-    // builder.create<mlir::memref::DeallocOp>(loc, temp_ub);
+    // 6. Reshape
+    // reshaped_tensor = MaybeReshapeTensor(loaded_tensor, dst);
+    
+    // 7. Dtype
+    // casted_tensor = CreateCastIfTypeMismatch(reshaped_tensor, dst);
+    
+    // 8. InsertSlice (maybe dynamic -> static?)
+    // tensor<1x?xf32> into tensor<8x16x4xf32>
+    // ...
 
-    loaded_tensor = CreateCastIfTypeMismatch(loaded_tensor, dst);
-    mlir::Value new_dst = InsertSliceWithReshapeAndCast(
-        loaded_tensor, dst, dst_offs, dst_sizes, dst_strides);
+    // 9. SetVarValue(npuirop.dst, new_dst);
 
-    SetVarValue(npuirop.dst, new_dst);
     return;
   }
 
   // Case 2: Store (Tensor -> MemRef)
   if (src_is_tensor && dst_is_memref) {
-    mlir::Value src_slice = builder.create<mlir::tensor::ExtractSliceOp>(
-        loc, src, src_offs, src_sizes, src_strides);
-    mlir::Value dst_view = builder.create<mlir::memref::SubViewOp>(
-        loc, dst, dst_offs, dst_sizes, dst_strides);
 
-    mlir::Type dst_elem_type = dst_view.getType().cast<mlir::MemRefType>().getElementType();
-    src_slice = CreateCastIfTypeMismatch(src_slice, dst_elem_type);
-    auto dst_shape = dst_view.getType().cast<mlir::MemRefType>().getShape();
-    src_slice = MaybeReshapeTensor(src_slice, dst_shape);
+    // 1. reshape(tensor)
+    // reshaped_tensor = MaybeReshapeTensor(src, dst);
 
-    // 1. Alloc UB
-    mlir::Value temp_ub = create_local_ub(dst_shape, dst_elem_type);
+    // 2. dtype
+    // casted_tensor = CreateCastIfTypeMismatch(reshaped_tensor, dst);
 
-    // 2. Materialize (Reg -> UB)
-    auto matOp = builder.create<mlir::bufferization::MaterializeInDestinationOp>(
-        loc, src_slice, temp_ub);
-    matOp.setWritable(true);
-
-    // 3. DMA Copy (UB -> GM)
-    builder.create<mlir::memref::CopyOp>(loc, temp_ub, dst_view);
-
-    // 4. Dealloc
-    // builder.create<mlir::memref::DeallocOp>(loc, temp_ub);
+    // 3. bufferization
+    // auto matOp = builder.create<mlir::bufferization::MaterializeInDestinationOp>(
+    //     loc, src_slice, temp_ub);
+    // matOp.setWritable(true);
 
     return;
   }
@@ -1520,23 +1528,24 @@ void CodeGenTileLangNPUIRDEV::AscendCopyCodegen(const CallNode *op) {
   // Case 3: Copy / Move (Tensor -> Tensor)
   if (src_is_tensor && dst_is_tensor) {
 
-    auto src_slice = builder.create<mlir::tensor::ExtractSliceOp>(
-        loc, src, src_offs, src_sizes, src_strides).getResult();
-    auto result = InsertSliceWithReshapeAndCast(
-        src_slice, dst, dst_offs, dst_sizes, dst_strides);
+    // 1. reshape(tensor)
+    // reshaped_tensor = MaybeReshapeTensor(src, dst);
 
-    SetVarValue(npuirop.dst, result);
+    // 2. dtype
+    // casted_tensor = CreateCastIfTypeMismatch(reshaped_tensor, dst);
+
+    // 3. InsertSlice (maybe dynamic -> static?)
+    // tensor<1x?xf32> into tensor<8x16x4xf32>
+    // ...
+
+    // SetVarValue(npuirop.dst, result);
+
     return;
   }
 
   // Case 4: MemRef -> MemRef (Legacy / Direct GM copy)
   if (src_is_memref && dst_is_memref) {
-    mlir::Value src_view = builder.create<mlir::memref::SubViewOp>(
-      loc, src, src_offs, src_sizes, src_strides);
-    mlir::Value dst_view = builder.create<mlir::memref::SubViewOp>(
-      loc, dst, dst_offs, dst_sizes, dst_strides);
-    
-    builder.create<mlir::memref::CopyOp>(loc, src_view, dst_view);
+    ICHECK(false) << "Unsupported memref to memref copy yet.";
     return;
   }
 
