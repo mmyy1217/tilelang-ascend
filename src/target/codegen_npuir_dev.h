@@ -277,7 +277,7 @@ private:
   mlir::Value ConvertTensorToMemref(mlir::Value value);
   mlir::Value CreateCastIfTypeMismatch(mlir::Value src_value, mlir::Value dst_value);
   mlir::Value CreateCastIfTypeMismatch(mlir::Value src, mlir::Type dst_elem_type);
-  mlir::Value MaybeReshapeTensor(mlir::Value src_tensor, llvm::ArrayRef<int64_t> target_shape);
+  mlir::Value MaybeReshapeTensor(mlir::Value src_tensor, mlir::Value dst_tensor);
   // generate slice/subview needed offsets, sizes, strides
   std::tuple<SmallVector<mlir::OpFoldResult>, 
              SmallVector<mlir::OpFoldResult>, 

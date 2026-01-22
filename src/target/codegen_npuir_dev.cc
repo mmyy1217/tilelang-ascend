@@ -991,94 +991,94 @@ mlir::Value CodeGenTileLangNPUIRDEV::CreateCastIfTypeMismatch(mlir::Value src, m
   return newCastOp->getResult(0);
 }
 
-// Reshape tensor for rank mismatch
-mlir::Value CodeGenTileLangNPUIRDEV::MaybeReshapeTensor(mlir::Value src_tensor, llvm::ArrayRef<int64_t> target_shape) {
-  auto src_type = src_tensor.getType().cast<mlir::RankedTensorType>();
+// // Reshape tensor for rank mismatch
+// mlir::Value CodeGenTileLangNPUIRDEV::MaybeReshapeTensor(mlir::Value src_tensor, llvm::ArrayRef<int64_t> target_shape) {
+//   auto src_type = src_tensor.getType().cast<mlir::RankedTensorType>();
   
-  // 1. Exact match check
-  if (src_type.getShape() == target_shape) {
-    return src_tensor;
-  }
+//   // 1. Exact match check
+//   if (src_type.getShape() == target_shape) {
+//     return src_tensor;
+//   }
 
-  // 2. Element count check (Static shapes only)
-  if (src_type.hasStaticShape()) {
-    int64_t target_elements = 1;
-    bool target_is_dynamic = false;
-    for (auto dim : target_shape) {
-      if (dim == mlir::ShapedType::kDynamic) {
-        target_is_dynamic = true; 
-        break;
-      }
-      target_elements *= dim;
-    }
+//   // 2. Element count check (Static shapes only)
+//   if (src_type.hasStaticShape()) {
+//     int64_t target_elements = 1;
+//     bool target_is_dynamic = false;
+//     for (auto dim : target_shape) {
+//       if (dim == mlir::ShapedType::kDynamic) {
+//         target_is_dynamic = true; 
+//         break;
+//       }
+//       target_elements *= dim;
+//     }
     
-    if (!target_is_dynamic && src_type.getNumElements() != target_elements) {
-      ICHECK(false) << "Element count mismatch in reshape: " 
-                    << src_type.getNumElements() 
-                    << " != " << target_elements;
-      return src_tensor;
-    }
-  } else {
-    ICHECK(false) << "Dynamic source shape is not currently supported in MaybeReshapeTensor. ";
-  }
+//     if (!target_is_dynamic && src_type.getNumElements() != target_elements) {
+//       ICHECK(false) << "Element count mismatch in reshape: " 
+//                     << src_type.getNumElements() 
+//                     << " != " << target_elements;
+//       return src_tensor;
+//     }
+//   } else {
+//     ICHECK(false) << "Dynamic source shape is not currently supported in MaybeReshapeTensor. ";
+//   }
 
-  // 3. Construct the shape tensor for the reshape op
-  // TODO: support dynamic shape
-  mlir::Location loc = builder.getUnknownLoc();
-  SmallVector<mlir::Value> shapeValues;
-  for (int64_t dim : target_shape) {
-    mlir::Value dimVal = builder.create<mlir::arith::ConstantIndexOp>(loc, dim);
-    shapeValues.push_back(dimVal);
-  }
+//   // 3. Construct the shape tensor for the reshape op
+//   // TODO: support dynamic shape
+//   mlir::Location loc = builder.getUnknownLoc();
+//   SmallVector<mlir::Value> shapeValues;
+//   for (int64_t dim : target_shape) {
+//     mlir::Value dimVal = builder.create<mlir::arith::ConstantIndexOp>(loc, dim);
+//     shapeValues.push_back(dimVal);
+//   }
   
-  auto shapeTensorType = mlir::RankedTensorType::get(
-    {static_cast<int64_t>(shapeValues.size())}, 
-    builder.getIndexType()
-  );
-  mlir::Value shapeTensor = builder.create<mlir::tensor::FromElementsOp>(
-    loc, shapeTensorType, shapeValues
-  );
+//   auto shapeTensorType = mlir::RankedTensorType::get(
+//     {static_cast<int64_t>(shapeValues.size())}, 
+//     builder.getIndexType()
+//   );
+//   mlir::Value shapeTensor = builder.create<mlir::tensor::FromElementsOp>(
+//     loc, shapeTensorType, shapeValues
+//   );
 
-  // 4. Create the ReshapeOp
-  auto dst_type = mlir::RankedTensorType::get(target_shape, src_type.getElementType());
-  auto reshapeOp = builder.create<mlir::tensor::ReshapeOp>(
-    loc, dst_type, src_tensor, shapeTensor
-  );
-  return reshapeOp.getResult();
-}
+//   // 4. Create the ReshapeOp
+//   auto dst_type = mlir::RankedTensorType::get(target_shape, src_type.getElementType());
+//   auto reshapeOp = builder.create<mlir::tensor::ReshapeOp>(
+//     loc, dst_type, src_tensor, shapeTensor
+//   );
+//   return reshapeOp.getResult();
+// }
 
-// Helper: Compute reassociation indices for shape collapse/expansion.
-llvm::SmallVector<mlir::ReassociationIndices> 
-CodeGenTileLangNPUIRDEV::ComputeReassociationIndices(
-    int64_t src_rank, int64_t dst_rank, 
-    mlir::MemRefType src_type, llvm::ArrayRef<mlir::OpFoldResult> dst_sizes) {
+// // Helper: Compute reassociation indices for shape collapse/expansion.
+// llvm::SmallVector<mlir::ReassociationIndices> 
+// CodeGenTileLangNPUIRDEV::ComputeReassociationIndices(
+//     int64_t src_rank, int64_t dst_rank, 
+//     mlir::MemRefType src_type, llvm::ArrayRef<mlir::OpFoldResult> dst_sizes) {
   
-  bool is_collapse = src_rank > dst_rank;
-  int64_t large_rank = is_collapse ? src_rank : dst_rank;
-  int64_t small_rank = is_collapse ? dst_rank : src_rank;
+//   bool is_collapse = src_rank > dst_rank;
+//   int64_t large_rank = is_collapse ? src_rank : dst_rank;
+//   int64_t small_rank = is_collapse ? dst_rank : src_rank;
   
-  // Use explicit mlir::ReassociationIndices type.
-  llvm::SmallVector<mlir::ReassociationIndices> reassociation(small_rank);
+//   // Use explicit mlir::ReassociationIndices type.
+//   llvm::SmallVector<mlir::ReassociationIndices> reassociation(small_rank);
   
-  int large_idx = large_rank - 1;
-  int small_idx = small_rank - 1;
+//   int large_idx = large_rank - 1;
+//   int small_idx = small_rank - 1;
   
-  // Greedy back-to-front mapping.
-  while (large_idx >= 0 && small_idx >= 0) {
-    reassociation[small_idx].push_back(large_idx);
-    large_idx--;
+//   // Greedy back-to-front mapping.
+//   while (large_idx >= 0 && small_idx >= 0) {
+//     reassociation[small_idx].push_back(large_idx);
+//     large_idx--;
     
-    if (large_idx + 1 == small_idx) {
-      small_idx--;
-    } 
-  }
+//     if (large_idx + 1 == small_idx) {
+//       small_idx--;
+//     } 
+//   }
   
-  for (auto &group : reassociation) {
-    std::reverse(group.begin(), group.end());
-  }
+//   for (auto &group : reassociation) {
+//     std::reverse(group.begin(), group.end());
+//   }
   
-  return reassociation;
-}
+//   return reassociation;
+// }
 
 // Reshape the source MemRef to match the rank and shape defined by `target_sizes`.
 mlir::Value CodeGenTileLangNPUIRDEV::MayReshapeMemRef(
@@ -1194,168 +1194,107 @@ CodeGenTileLangNPUIRDEV::CreateOpFoldResultArray(const Array<Range>& range) {
   return {offsets, sizes, strides};
 }
 
-mlir::Value CodeGenTileLangNPUIRDEV::InsertSliceWithReshapeAndCast(
-    mlir::Value src_slice, 
-    mlir::Value dst_tensor, 
-    llvm::SmallVector<mlir::OpFoldResult>& dst_offsets,
-    llvm::SmallVector<mlir::OpFoldResult>& dst_sizes,
-    llvm::SmallVector<mlir::OpFoldResult>& dst_strides) {
+// mlir::Value CodeGenTileLangNPUIRDEV::InsertSliceWithReshapeAndCast(
+//     mlir::Value src_slice, 
+//     mlir::Value dst_tensor, 
+//     llvm::SmallVector<mlir::OpFoldResult>& dst_offsets,
+//     llvm::SmallVector<mlir::OpFoldResult>& dst_sizes,
+//     llvm::SmallVector<mlir::OpFoldResult>& dst_strides) {
 
-  // 1. Cast
-  src_slice = CreateCastIfTypeMismatch(src_slice, dst_tensor);
+//   // 1. Cast
+//   src_slice = CreateCastIfTypeMismatch(src_slice, dst_tensor);
 
-  // 2. Reshape: fast induct Target Shape
-  SmallVector<int64_t> target_shape;
-  for (const auto& size : dst_sizes) {
-    if (std::optional<int64_t> cst = getConstantIntValue(size)) {
-      target_shape.push_back(cst.value());
-    } else {
-      target_shape.push_back(mlir::ShapedType::kDynamic);
-    }
-  }
-  src_slice = MaybeReshapeTensor(src_slice, target_shape);
+//   // 2. Reshape: fast induct Target Shape
+//   SmallVector<int64_t> target_shape;
+//   for (const auto& size : dst_sizes) {
+//     if (std::optional<int64_t> cst = getConstantIntValue(size)) {
+//       target_shape.push_back(cst.value());
+//     } else {
+//       target_shape.push_back(mlir::ShapedType::kDynamic);
+//     }
+//   }
+//   src_slice = MaybeReshapeTensor(src_slice, target_shape);
 
-  // 3. Insert
-  return builder.create<mlir::tensor::InsertSliceOp>(
-    builder.getUnknownLoc(), src_slice, dst_tensor, 
-    dst_offsets, dst_sizes, dst_strides).getResult();
-}
+//   // 3. Insert
+//   return builder.create<mlir::tensor::InsertSliceOp>(
+//     builder.getUnknownLoc(), src_slice, dst_tensor, 
+//     dst_offsets, dst_sizes, dst_strides).getResult();
+// }
 
-void CodeGenTileLangNPUIRDEV::SmartMemRefCopy(mlir::Value src, mlir::Value dst) {
-  auto src_type = src.getType().cast<mlir::MemRefType>();
-  auto dst_type = dst.getType().cast<mlir::MemRefType>();
-  auto loc = builder.getUnknownLoc();
+mlir::Value CodeGenTileLangNPUIRDEV::MaybeReshapeTensor(mlir::Value src, mlir::Value dst) {
 
-  // Copy if shape match
-  if (src_type.getShape() == dst_type.getShape()) {
-    builder.create<mlir::memref::CopyOp>(loc, TypeRange{}, src, dst);
-    return;
-  }
+  auto src_tensor_type = src.getType().cast<mlir::TensorType>();
 
-  // 2. Try Reinterpret Copy if shape not match but numElements match
-  if (src_type.getNumElements() == dst_type.getNumElements()) {
-      
-    // safety check: stride hack only when elementTypes match
-    if (src_type.getElementType() != dst_type.getElementType()) {
-      ICHECK(false) << "HandleMemRefReshapeCopy requires same element type.";
-      return;
-    }
-
-    // Get offset of src MemRef
-    auto extractOp = builder.create<mlir::memref::ExtractStridedMetadataOp>(loc, src);
-    mlir::Value offsetValue = extractOp.getOffset();
-
-    llvm::SmallVector<mlir::OpFoldResult> offsets;
-    offsets.push_back(offsetValue);
-
-    // 1. get sizes for dst value.
-    llvm::SmallVector<mlir::OpFoldResult> sizes;
-    llvm::SmallVector<mlir::Value> dim_values;
-
+  // Build target shape values: handle dynamic dimensions
+  llvm::SmallVector<mlir::Value> target_shape_vals;
+  llvm::SmallVector<int64_t> target_shape_static;
+  if (dst.getType().isa<mlir::MemRefType>()) {
+    auto dst_type = dst.getType().cast<mlir::MemRefType>();
+    // Iterate through destination memref dimensions
     for (int i = 0; i < dst_type.getRank(); ++i) {
-      int64_t static_dim = dst_type.getDimSize(i);
+      int64_t dim = dst_type.getDimSize(i);
       
-      if (mlir::ShapedType::isDynamic(static_dim)) {
-        mlir::Value dim_val = builder.create<mlir::memref::DimOp>(loc, dst, i);
-        sizes.push_back(dim_val);
-        dim_values.push_back(dim_val);
+      if (mlir::ShapedType::isDynamic(dim)) {
+        // Dynamic dimension: get actual size at runtime using memref.dim
+        mlir::Value dim_val = builder.create<mlir::memref::DimOp>(builder.getUnknownLoc(), dst, i);
+        target_shape_vals.push_back(dim_val);
+        target_shape_static.push_back(mlir::ShapedType::kDynamic);
       } else {
-        sizes.push_back(builder.getIndexAttr(static_dim));
-        dim_values.push_back(builder.create<mlir::arith::ConstantIndexOp>(loc, static_dim));
+        // Static dimension: create constant index value 
+        mlir::Value dim_val = builder.create<mlir::arith::ConstantIndexOp>(builder.getUnknownLoc(), dim);
+        target_shape_vals.push_back(dim_val);
+        target_shape_static.push_back(dim);
       }
     }
-
-    // 2. Compute strides for StridedLayoutAttr
-    // Rule: Calculate from the last dimension to the first. When encountering a dynamic dimension,
-    // the current and all preceding strides become dynamic.
-    llvm::SmallVector<int64_t> layout_strides(dst_type.getRank(), mlir::ShapedType::kDynamic);
-    int64_t current_stride = 1;
-    bool all_static_so_far = true;
-
-    // Calculate from the lowest dimension (last dimension) to the highest
-    for (int i = dst_type.getRank() - 1; i >= 0; --i) {
-      int64_t dim_size = dst_type.getDimSize(i);
-      
-      // Set stride for the current dimension
-      if (i == dst_type.getRank() - 1) {
-        // The lowest dimension's stride is always 1
-        layout_strides[i] = 1;
+  } else if (dst.getType().isa<mlir::RankedTensorType>()) {
+    auto dst_type = dst.getType().cast<mlir::RankedTensorType>();
+    // Iterate through destination memref dimensions
+    for (int i = 0; i < dst_type.getRank(); ++i) {
+      int64_t dim = dst_type.getDimSize(i);
+      if (mlir::ShapedType::isDynamic(dim)) {
+        // Dynamic dimension: get actual size at runtime using memref.dim
+        mlir::Value dim_val = builder.create<mlir::tensor::DimOp>(builder.getUnknownLoc(), dst, i);
+        target_shape_vals.push_back(dim_val);
+        target_shape_static.push_back(mlir::ShapedType::kDynamic);
       } else {
-        // Normal case
-        layout_strides[i] = current_stride;
+        // Static dimension: create constant index value 
+        mlir::Value dim_val = builder.create<mlir::arith::ConstantIndexOp>(builder.getUnknownLoc(), dim);
+        target_shape_vals.push_back(dim_val);
+        target_shape_static.push_back(dim);
       }
-      
-      // Update current_stride for the next dimension (higher dimension)
-      if (mlir::ShapedType::isDynamic(dim_size)) {
-        all_static_so_far = false;
-        break;
-      } else {
-        current_stride *= dim_size;
-      }
-    }
+    }    
 
-    // 3. Prepare dynamic strides parameters for reinterpret_cast
-    llvm::SmallVector<mlir::OpFoldResult> strides;
-
-    if (all_static_so_far) {
-      // All static: use static stride values
-      for (int64_t stride : layout_strides) {
-        strides.push_back(builder.getIndexAttr(stride));
-      }
-    } else {
-      // Has dynamic dimensions: need to compute dynamic strides
-      // Create a vector to store computed strides (calculated from back to front)
-      llvm::SmallVector<mlir::Value> temp_strides(dst_type.getRank());
-      
-      // Calculate from back to front
-      mlir::Value current_dyn_stride = builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
-      for (int i = dst_type.getRank() - 1; i >= 0; --i) {
-        // Store stride for current dimension
-        temp_strides[i] = current_dyn_stride;
-        
-        if (i > 0) {
-          // Update current_dyn_stride for the next dimension (higher dimension)
-          // current_dimension_stride * current_dimension_size
-          current_dyn_stride = builder.create<mlir::arith::MulIOp>(
-              loc, current_dyn_stride, dim_values[i]);
-        }
-      }
-      
-      // Convert temp_strides to OpFoldResult and add to strides in order
-      for (int i = 0; i < dst_type.getRank(); ++i) {
-        strides.push_back(temp_strides[i]);
-      }
-    }
-
-    // 4. Create StridedLayoutAttr
-    auto layout = mlir::StridedLayoutAttr::get(
-        &context, 
-        mlir::ShapedType::kDynamic,
-        layout_strides);
-
-    // 5. Create target type
-    mlir::MemRefType new_dst_type = mlir::MemRefType::get(
-        dst_type.getShape(),
-        dst_type.getElementType(),
-        layout,
-        src_type.getMemorySpace());
-
-    // 6. Create reinterpret_cast
-    mlir::Value reinterpreted_src = builder.create<mlir::memref::ReinterpretCastOp>(
-        loc,
-        new_dst_type,
-        src,
-        offsets,
-        sizes,
-        strides
-    );
-    
-    // 7. Copy
-    builder.create<mlir::memref::CopyOp>(loc, TypeRange{}, reinterpreted_src, dst);
-
-    return;
   }
-  ICHECK(false) << "SmartMemRefCopy: Shape mismatch and cannot interpret cast. ";
+
+  // Create target shape type for the reshape operation
+  auto target_shape_type = mlir::RankedTensorType::get(
+      target_shape_static,  // Shape with dynamic dimension markers
+      src_tensor_type.getElementType());
+  
+  // Create shape tensor (1D tensor containing all dimension sizes)
+  mlir::Value shape_tensor;
+  
+  if (target_shape_vals.size() == 1) {
+    // For 1D case, create tensor directly
+    shape_tensor = builder.create<mlir::tensor::FromElementsOp>(
+        builder.getUnknownLoc(), target_shape_vals);
+  } else {
+    // For multi-dimensional case, create 1D tensor of indices
+    auto shape_tensor_type = mlir::RankedTensorType::get(
+        {static_cast<int64_t>(target_shape_vals.size())},
+        builder.getIndexType());
+    shape_tensor = builder.create<mlir::tensor::FromElementsOp>(
+        builder.getUnknownLoc(), shape_tensor_type, target_shape_vals);
+  }
+  
+  // Create tensor.reshape operation to match destination shape
+  mlir::Value reshaped_tensor = builder.create<mlir::tensor::ReshapeOp>(
+      builder.getUnknownLoc(),
+      target_shape_type,
+      src,
+      shape_tensor);
+  
+  return reshaped_tensor;
 }
 
 mlir::Value CodeGenTileLangNPUIRDEV::GetOrInsertMasterTensor(mlir::Value memref) {
@@ -1494,7 +1433,13 @@ void CodeGenTileLangNPUIRDEV::AscendCopyCodegen(const CallNode *op) {
         loc, ub_view, /*restrict=*/true, /*writable=*/false);
 
     // 6. Reshape
-    // reshaped_tensor = MaybeReshapeTensor(loaded_tensor, dst);
+    auto src_memref_type = src.getType().cast<mlir::MemRefType>();
+    mlir::Value reshaped_tensor;
+    if (src_memref_type.getShape() != dst_tensor_type.getShape()) {
+      reshaped_tensor = MaybeReshapeTensor(loaded_tensor, dst);
+    } else {
+      reshaped_tensor = loaded_tensor;
+    }
     
     // 7. Dtype
     // casted_tensor = CreateCastIfTypeMismatch(reshaped_tensor, dst);
@@ -1512,7 +1457,14 @@ void CodeGenTileLangNPUIRDEV::AscendCopyCodegen(const CallNode *op) {
   if (src_is_tensor && dst_is_memref) {
 
     // 1. reshape(tensor)
-    // reshaped_tensor = MaybeReshapeTensor(src, dst);
+    auto src_tensor_type = src.getType().cast<mlir::RankedTensorType>();
+    auto dst_memref_type = dst.getType().cast<mlir::MemRefType>();
+    mlir::Value reshaped_tensor;
+    if (src_tensor_type.getShape() != dst_memref_type.getShape()) {
+      reshaped_tensor = MaybeReshapeTensor(src, dst);
+    } else {
+      reshaped_tensor = src;
+    }
 
     // 2. dtype
     // casted_tensor = CreateCastIfTypeMismatch(reshaped_tensor, dst);
@@ -1529,6 +1481,14 @@ void CodeGenTileLangNPUIRDEV::AscendCopyCodegen(const CallNode *op) {
   if (src_is_tensor && dst_is_tensor) {
 
     // 1. reshape(tensor)
+    auto src_tensor_type = src.getType().cast<mlir::RankedTensorType>();
+    auto dst_tensor_type = dst.getType().cast<mlir::RankedTensorType>();
+    mlir::Value reshaped_tensor;
+    if (src_tensor_type.getShape() != dst_tensor_type.getShape()) {
+      reshaped_tensor = MaybeReshapeTensor(src, dst);
+    } else {
+      reshaped_tensor = src;
+    }
     // reshaped_tensor = MaybeReshapeTensor(src, dst);
 
     // 2. dtype
