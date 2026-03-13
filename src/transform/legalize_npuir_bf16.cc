@@ -24,7 +24,7 @@ using namespace tir;
 using arith::IRMutatorWithAnalyzer;
 
 class LegalizeNpuirBF16Mutator : public IRMutatorWithAnalyzer {
- public:
+public:
   static PrimFunc Substitute(PrimFunc f) {
     arith::Analyzer analyzer;
     LegalizeNpuirBF16Mutator mutator(&analyzer);
@@ -33,7 +33,7 @@ class LegalizeNpuirBF16Mutator : public IRMutatorWithAnalyzer {
     return f;
   }
 
- private:
+private:
   using IRMutatorWithAnalyzer::IRMutatorWithAnalyzer;
 
   struct PreparedRegion {
@@ -45,8 +45,30 @@ class LegalizeNpuirBF16Mutator : public IRMutatorWithAnalyzer {
     return buffer.defined() && buffer->dtype == DataType::BFloat(16);
   }
 
-  bool IsNpuirAdd(const CallNode* call) const {
-    return call != nullptr && call->op.same_as(Op::Get("tl.npuir_add"));
+  bool IsBinaryOp(const CallNode *call) const {
+    if (call == nullptr) {
+      return false;
+    }
+    std::vector<std::string> binary_ops = {"tl.npuir_add", "tl.npuir_mul",
+                                           "tl.npuir_max", "tl.npuir_min",
+                                           "tl.npuir_div", "tl.npuir_sub"};
+    return std::any_of(binary_ops.begin(), binary_ops.end(),
+                       [&](const std::string &op_name) {
+                         return call->op.same_as(Op::Get(op_name));
+                       });
+  }
+
+  bool IsUnaryOp(const CallNode *call) const {
+    if (call == nullptr) {
+      return false;
+    }
+    std::vector<std::string> unary_ops = {
+        "tl.npuir_exp",  "tl.npuir_relu",  "tl.npuir_sigmoid", "tl.npuir_ln",
+        "tl.npuir_sqrt", "tl.npuir_rsqrt", "tl.npuir_abs",     "tl.npuir_rec"};
+    return std::any_of(unary_ops.begin(), unary_ops.end(),
+                       [&](const std::string &op_name) {
+                         return call->op.same_as(Op::Get(op_name));
+                       });
   }
 
   Buffer CreateTempBuffer(const Array<Range>& region, DataType dtype, const String& scope,
@@ -132,21 +154,14 @@ class LegalizeNpuirBF16Mutator : public IRMutatorWithAnalyzer {
     return new_block;
   }
 
-  Stmt VisitStmt_(const EvaluateNode* op) final {
-    PrimExpr new_value = this->VisitExpr(op->value);
-    const CallNode* call = new_value.as<CallNode>();
-    if (!IsNpuirAdd(call) || block_temp_buffers_.empty()) {
-      if (new_value.same_as(op->value)) {
-        return GetRef<Stmt>(op);
-      }
-      return Evaluate(new_value);
-    }
-
-    const CallNode* src0_call = call->args[0].as<CallNode>();
-    const CallNode* src1_call = call->args[1].as<CallNode>();
-    const CallNode* dst_call = call->args[2].as<CallNode>();
+  Stmt processBinaryOp(const PrimExpr &new_value) {
+    const auto *call = new_value.as<CallNode>();
+    const auto *src0_call = call->args[0].as<CallNode>();
+    const auto *src1_call = call->args[1].as<CallNode>();
+    const auto *dst_call = call->args[2].as<CallNode>();
     if (src0_call == nullptr || src1_call == nullptr || dst_call == nullptr ||
-        !src0_call->op.same_as(Op::Get("tl.region")) || !src1_call->op.same_as(Op::Get("tl.region")) ||
+        !src0_call->op.same_as(Op::Get("tl.region")) ||
+        !src1_call->op.same_as(Op::Get("tl.region")) ||
         !dst_call->op.same_as(Op::Get("tl.region"))) {
       return Evaluate(new_value);
     }
@@ -165,18 +180,67 @@ class LegalizeNpuirBF16Mutator : public IRMutatorWithAnalyzer {
     PreparedRegion dst = PrepareDestinationRegion(dst_region);
 
     Array<Stmt> seq;
-    for (const Stmt& stmt : src0.prefix) {
+    for (const Stmt &stmt : src0.prefix) {
       seq.push_back(stmt);
     }
-    for (const Stmt& stmt : src1.prefix) {
+    for (const Stmt &stmt : src1.prefix) {
       seq.push_back(stmt);
     }
-    Array<PrimExpr> add_args{src0.region, src1.region, dst.region};
-    seq.push_back(Evaluate(Call(DataType::Void(), Op::Get("tl.npuir_add"), add_args)));
-    for (const Stmt& stmt : dst.prefix) {
+    Array<PrimExpr> op_args{src0.region, src1.region, dst.region};
+    seq.push_back(Evaluate(Call(DataType::Void(), call->op, op_args)));
+    for (const Stmt &stmt : dst.prefix) {
       seq.push_back(stmt);
     }
     return SeqStmt::Flatten(seq);
+  }
+
+  Stmt processUnaryOp(const PrimExpr &new_value) {
+    const auto *call = new_value.as<CallNode>();
+    const auto *src_call = call->args[0].as<CallNode>();
+    const auto *dst_call = call->args[1].as<CallNode>();
+    if (src_call == nullptr || dst_call == nullptr ||
+        !src_call->op.same_as(Op::Get("tl.region")) ||
+        !dst_call->op.same_as(Op::Get("tl.region"))) {
+      return Evaluate(new_value);
+    }
+
+    RegionOp src_region(src_call->args, BufferMap{});
+    RegionOp dst_region(dst_call->args, BufferMap{});
+    if (!IsBF16(src_region.GetBuffer()) && !IsBF16(dst_region.GetBuffer())) {
+      return Evaluate(new_value);
+    }
+
+    String compute_scope = dst_region.GetBuffer().scope();
+    PreparedRegion src = PrepareSourceRegion(src_region, compute_scope);
+    PreparedRegion dst = PrepareDestinationRegion(dst_region);
+
+    Array<Stmt> seq;
+    for (const Stmt &stmt : src.prefix) {
+      seq.push_back(stmt);
+    }
+    Array<PrimExpr> op_args{src.region, dst.region};
+    seq.push_back(Evaluate(Call(DataType::Void(), call->op, op_args)));
+    for (const Stmt &stmt : dst.prefix) {
+      seq.push_back(stmt);
+    }
+    return SeqStmt::Flatten(seq);
+  }
+
+  Stmt VisitStmt_(const EvaluateNode *op) final {
+    PrimExpr new_value = this->VisitExpr(op->value);
+    const auto *call = new_value.as<CallNode>();
+    if ((!IsBinaryOp(call) && !IsUnaryOp(call)) ||
+        block_temp_buffers_.empty()) {
+      if (new_value.same_as(op->value)) {
+        return GetRef<Stmt>(op);
+      }
+      return Evaluate(new_value);
+    }
+    if (IsBinaryOp(call)) {
+      return processBinaryOp(new_value);
+    }
+
+    return processUnaryOp(new_value);
   }
 
   int temp_buffer_id_{0};
