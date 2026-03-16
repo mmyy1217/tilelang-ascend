@@ -41,6 +41,34 @@ def workspace_copy_kernel(M, N):
     return workspace_copy
 
 
+def workspace_fixpipe_loop_kernel():
+
+    @T.prim_func
+    def workspace_fixpipe_loop(
+        A: T.Tensor((32, 32), DTYPE),
+        B: T.Tensor((32, 32), DTYPE),
+        C: T.Tensor((32, 32), "float32"),
+    ):
+        with T.Kernel(1, is_npu=True) as (cid, _):
+            A_ub = T.alloc_shared((32, 32), DTYPE)
+            B_ub = T.alloc_shared((32, 32), DTYPE)
+            Acc = T.alloc_fragment((32, 32), "float32")
+            WS = T.alloc_workspace((32, 32), "float32")
+            Out_ub = T.alloc_fragment((32, 32), "float32")
+
+            T.copy(A, A_ub)
+            T.copy(B, B_ub)
+
+            for _ in T.serial(2):
+                T.gemm(A_ub, B_ub, Acc, initC=True)
+                T.copy(Acc, WS)
+                T.copy(WS, Out_ub)
+
+            T.copy(Out_ub, C)
+
+    return workspace_fixpipe_loop
+
+
 @pytest.mark.parametrize("M, N", TEST_SHAPES)
 def test_workspace_copy_dev(M, N):
     os.environ["TILELANG_ASCEND_MODE"] = "Developer"
@@ -54,3 +82,8 @@ def test_workspace_copy_dev(M, N):
 
     compiled_kernel(src, dst)
     torch.testing.assert_close(dst, ref, rtol=1e-2, atol=1e-2)
+
+
+def test_workspace_fixpipe_loop_compile_dev():
+    os.environ["TILELANG_ASCEND_MODE"] = "Developer"
+    tilelang.compile(workspace_fixpipe_loop_kernel(), target="npuir")

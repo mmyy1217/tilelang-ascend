@@ -207,15 +207,6 @@ protected:
   // Variable shadowing and scoping is not a problem in TileLang
   // Each variable assignment gets a unique name in TIR
   std::vector<std::unordered_map<const VarNode *, mlir::Value>> var_map_;
-  struct WorkspaceTensorRecord {
-    mlir::Value tensor;
-    llvm::SmallVector<mlir::OpFoldResult> offs;
-    llvm::SmallVector<mlir::OpFoldResult> sizes;
-    llvm::SmallVector<mlir::OpFoldResult> strides;
-  };
-  // Latest tensor value produced for workspace buffers (e.g. fixpipe/store)
-  // with its source workspace region.
-  std::unordered_map<const VarNode *, WorkspaceTensorRecord> workspace_tensor_map_;
   // Whether current function is restricted
   bool is_restricted_{true};
   // The analyzer information
@@ -240,12 +231,10 @@ protected:
   std::vector<int64_t> GetStrideFromShapeAPI(Array<tvm::PrimExpr> shape);
   // Collect all variables defined outside the loop body
   void CollectVarsUsedInBodyButDefinedOutside(const ForNode *op, 
-      std::vector<const VarNode*>& loop_carried_vars,
-      std::vector<const VarNode*>* workspace_touched_vars = nullptr);
+      std::vector<const VarNode*>& loop_carried_vars);
   // Collect all variables defined outside the if block
   void CollectVarsUsedInBodyButDefinedOutside(const IfThenElseNode* op,
-      std::vector<const VarNode*>& if_carried_vars,
-      std::vector<const VarNode*>* workspace_touched_vars = nullptr);
+      std::vector<const VarNode*>& if_carried_vars);
 
 private:
   mlir::Value GetEventID(PrimExpr id);
@@ -350,13 +339,16 @@ private:
       const tvm::tl::AscendCopy& npuirop,
       mlir::Value src, mlir::Value dst,
       const SliceRange& srcR, const SliceRange& dstR,
-      mlir::Location loc,
-      bool use_hivm_load = false);
+      mlir::Location loc);
   // Small utilities
   template <typename RangeT>
   SliceRange MakeSliceRange(const RangeT& range);
   mlir::Value CreateStaticLocalUB(
       llvm::ArrayRef<int64_t> shape,
+      mlir::Type elem_type,
+      mlir::Location loc);
+  mlir::Value CreateTempMemrefLikeShaped(
+      mlir::Value shaped_value,
       mlir::Type elem_type,
       mlir::Location loc);
   bool IsStaticOneOFR(mlir::OpFoldResult ofr) const;
@@ -405,19 +397,14 @@ private:
   private:
     CodeGenTileLangNPUIRDEV* outer_;
     std::vector<const VarNode*>& loop_carried_vars_;
-    std::vector<const VarNode*>* workspace_touched_vars_;
     std::unordered_set<const VarNode *> vars_set_;
-    std::unordered_set<const VarNode *> workspace_vars_set_;
 
     void CheckVar(const tir::VarNode* var_node);
-    void CheckWorkspaceVar(const tir::VarNode* var_node);
     
   public:
     LoopCarriedVarCollector(CodeGenTileLangNPUIRDEV* outer, 
-                            std::vector<const VarNode*>& loop_carried_vars,
-                            std::vector<const VarNode*>* workspace_touched_vars = nullptr)
-        : outer_(outer), loop_carried_vars_(loop_carried_vars),
-          workspace_touched_vars_(workspace_touched_vars) {}
+                            std::vector<const VarNode*>& loop_carried_vars)
+        : outer_(outer), loop_carried_vars_(loop_carried_vars) {}
     
     using tir::StmtExprVisitor::VisitStmt;
     using tir::StmtExprVisitor::VisitExpr;

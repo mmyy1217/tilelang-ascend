@@ -9,7 +9,6 @@
 #include "../op/ascend.h"
 #include "../op/builtin.h"
 #include "arith/pattern_match.h"
-#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
@@ -462,47 +461,16 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::ForNode *op) {
 
   // Collect all variables defined in the loop body,
   // which may need to be carried as loop values
-  std::vector<const tir::VarNode *> loop_carried_vars;
-  std::vector<const tir::VarNode*> touched_workspace_vars;
-  std::vector<const tir::VarNode*> carried_workspace_vars;
-  std::vector<WorkspaceTensorRecord> carried_workspace_records;
+  std::vector<const tir::VarNode*> loop_carried_vars;
   std::vector<mlir::Value> init_values;
 
   // Traverse the body of the for loop body, and generate
   // region iter args
-  for (const auto *var_node : loop_carried_vars) {
-  CollectVarsUsedInBodyButDefinedOutside(
-      op, loop_carried_vars, &touched_workspace_vars);
-  for (const auto *var_node : loop_carried_vars) {
+  CollectVarsUsedInBodyButDefinedOutside(op, loop_carried_vars);
+  for (const auto* var_node : loop_carried_vars) {
     auto it = GetVarValue(var_node);
     ICHECK(it != mlir::Value{});
     init_values.push_back(it);
-  }
-
-  auto can_carry_workspace_record = [](const WorkspaceTensorRecord& record) {
-    if (!record.tensor || !record.tensor.getType().isa<mlir::RankedTensorType>()) {
-      return false;
-    }
-    auto all_static = [](const llvm::SmallVector<mlir::OpFoldResult>& ofrs) {
-      return std::all_of(ofrs.begin(), ofrs.end(), [](mlir::OpFoldResult ofr) {
-        return ofr.is<mlir::Attribute>();
-      });
-    };
-    return all_static(record.offs) && all_static(record.sizes) &&
-           all_static(record.strides);
-  };
-
-  for (const auto* var_node : touched_workspace_vars) {
-    auto it = workspace_tensor_map_.find(var_node);
-    if (it == workspace_tensor_map_.end()) {
-      continue;
-    }
-    if (!can_carry_workspace_record(it->second)) {
-      continue;
-    }
-    carried_workspace_vars.push_back(var_node);
-    carried_workspace_records.push_back(it->second);
-    init_values.push_back(it->second.tensor);
   }
 
   // Create the loop
@@ -525,12 +493,6 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::ForNode *op) {
   for (const auto *var_node : loop_carried_vars) {
     SetVarValue(var_node, forOp.getRegionIterArg(iter++));
   }
-  int workspace_iter_begin = iter;
-  for (size_t i = 0; i < carried_workspace_vars.size(); ++i) {
-    auto record = carried_workspace_records[i];
-    record.tensor = forOp.getRegionIterArg(iter++);
-    workspace_tensor_map_[carried_workspace_vars[i]] = record;
-  }
 
   // Traverse the body of the for loop
   this->VisitStmt(op->body);
@@ -541,14 +503,6 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::ForNode *op) {
     auto it = GetVarValue(var_node);
     ICHECK(it != mlir::Value{});
     yield_values.push_back(it);
-  }
-  for (size_t i = 0; i < carried_workspace_vars.size(); ++i) {
-    auto map_it = workspace_tensor_map_.find(carried_workspace_vars[i]);
-    if (map_it != workspace_tensor_map_.end() && map_it->second.tensor) {
-      yield_values.push_back(map_it->second.tensor);
-    } else {
-      yield_values.push_back(forOp.getRegionIterArg(workspace_iter_begin + i));
-    }
   }
 
   if (!yield_values.empty()) {
@@ -561,22 +515,6 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::ForNode *op) {
   iter = 0;
   for (const auto *var_node : loop_carried_vars) {
     SetVarValue(var_node, forOp.getResult(iter++));
-  }
-
-  std::unordered_set<const tir::VarNode*> carried_workspace_set(
-      carried_workspace_vars.begin(), carried_workspace_vars.end());
-  for (const auto* var_node : touched_workspace_vars) {
-    if (carried_workspace_set.count(var_node) == 0) {
-      workspace_tensor_map_.erase(var_node);
-    }
-  }
-  for (const auto* var_node : carried_workspace_vars) {
-    mlir::Value carried_tensor = forOp.getResult(iter++);
-    auto map_it = workspace_tensor_map_.find(var_node);
-    if (map_it == workspace_tensor_map_.end()) {
-      continue;
-    }
-    map_it->second.tensor = carried_tensor;
   }
 }
 
@@ -675,19 +613,15 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::IfThenElseNode *op) {
 
 void CodeGenTileLangNPUIRDEV::CollectVarsUsedInBodyButDefinedOutside(
     const tir::ForNode *op,
-    std::vector<const VarNode *> &loop_carried_vars,
-    std::vector<const VarNode*>* workspace_touched_vars) {
-  LoopCarriedVarCollector collector(
-      this, loop_carried_vars, workspace_touched_vars);
+    std::vector<const VarNode*>& loop_carried_vars) {
+  LoopCarriedVarCollector collector(this, loop_carried_vars);
   collector.VisitStmt(op->body);
 }
 
 void CodeGenTileLangNPUIRDEV::CollectVarsUsedInBodyButDefinedOutside(
-    const IfThenElseNode *op,
-    std::vector<const VarNode *> &if_carried_vars,
-    std::vector<const VarNode*>* workspace_touched_vars) {
-  LoopCarriedVarCollector collector(
-      this, if_carried_vars, workspace_touched_vars);
+    const IfThenElseNode* op,
+    std::vector<const VarNode*>& if_carried_vars) {
+  LoopCarriedVarCollector collector(this, if_carried_vars);
   collector.VisitStmt(op->then_case);
   if (op->else_case) {
     collector.VisitStmt(op->else_case.value());
@@ -1420,8 +1354,39 @@ mlir::Value CodeGenTileLangNPUIRDEV::CreateStaticLocalUB(
   return allocOp.getResult();
 }
 
-// Returns true if an OpFoldResult is a compile-time constant integer equal
-// to 1. Used to detect static-1 dimensions for rank canonicalization.
+mlir::Value CodeGenTileLangNPUIRDEV::CreateTempMemrefLikeShaped(
+    mlir::Value shaped_value, mlir::Type elem_type, mlir::Location loc) {
+  auto shapedTy = shaped_value.getType().dyn_cast<mlir::ShapedType>();
+  ICHECK(shapedTy && shapedTy.hasRank())
+      << "expected ranked tensor/memref for temporary memref allocation";
+
+  llvm::SmallVector<int64_t> static_shape;
+  llvm::SmallVector<mlir::Value> dyn_sizes;
+  static_shape.reserve(shapedTy.getRank());
+  dyn_sizes.reserve(shapedTy.getRank());
+
+  for (int64_t i = 0; i < shapedTy.getRank(); ++i) {
+    if (shapedTy.isDynamicDim(i)) {
+      static_shape.push_back(mlir::ShapedType::kDynamic);
+      if (shaped_value.getType().isa<mlir::TensorType>()) {
+        dyn_sizes.push_back(builder.create<mlir::tensor::DimOp>(
+            loc, shaped_value, i));
+      } else {
+        dyn_sizes.push_back(builder.create<mlir::memref::DimOp>(
+            loc, shaped_value, i));
+      }
+      continue;
+    }
+    static_shape.push_back(shapedTy.getDimSize(i));
+  }
+
+  auto memrefType = mlir::MemRefType::get(static_shape, elem_type);
+  auto allocOp = builder.create<mlir::memref::AllocOp>(loc, memrefType, dyn_sizes);
+  return allocOp.getResult();
+}
+
+// Returns true if an OpFoldResult is a compile-time constant integer equal to 1.
+// Used to detect static-1 dimensions for rank canonicalization.
 bool CodeGenTileLangNPUIRDEV::IsStaticOneOFR(mlir::OpFoldResult ofr) const {
   if (auto attr = ofr.dyn_cast<mlir::Attribute>()) {
     if (auto ia = attr.dyn_cast<mlir::IntegerAttr>())
@@ -1725,163 +1690,24 @@ void CodeGenTileLangNPUIRDEV::EmitCopyMemrefToTensor(
     bool use_hivm_load) {
   auto dst_tensor_type_ori = dst.getType().cast<mlir::RankedTensorType>();
 
-  // Workspace GM -> tensor: prefer tensor-form hivm.hir.load so both
-  // ins/outs operands are tensors.
+  // Workspace GM -> tensor: issue hivm.hir.load on memrefs, then bridge
+  // the temporary buffer back to tensor SSA.
   if (use_hivm_load) {
     auto src_memref_ty = src.getType().cast<mlir::MemRefType>();
     int64_t maxRank = std::min<int64_t>(src_memref_ty.getRank(), dst_tensor_type_ori.getRank());
     CollapsedDims srcC = CollapseStaticOneDims(srcR.sizes, maxRank);
+    mlir::Value src_view = CreateRankReducedSubviewFromBaseRank(
+        src, srcR.offs, srcR.sizes, srcR.strides, srcC.projected, loc);
     mlir::Value dst_slice = CreateRankReducedExtractSlice(
         dst, dstR.offs, dstR.sizes, dstR.strides, srcC.projected, loc);
-    mlir::Value src_tensor;
-    bool post_load_insert_needed = false;
-    llvm::SmallVector<mlir::OpFoldResult> post_insert_offs;
-    llvm::SmallVector<mlir::OpFoldResult> post_insert_sizes;
-    llvm::SmallVector<mlir::OpFoldResult> post_insert_strides;
-
-    auto it = workspace_tensor_map_.find(npuirop.src->data.get());
-    if (it != workspace_tensor_map_.end()) {
-      const auto& rec = it->second;
-      if (rec.tensor && rec.tensor.getType().isa<mlir::RankedTensorType>() &&
-          rec.offs.size() == srcR.offs.size() &&
-          rec.sizes.size() == srcR.sizes.size() &&
-          rec.strides.size() == srcR.strides.size()) {
-        auto recTy = rec.tensor.getType().cast<mlir::RankedTensorType>();
-        CollapsedDims recC = CollapseStaticOneDims(rec.sizes, recTy.getRank());
-        if ((int64_t)recC.keptIdx.size() == recTy.getRank()) {
-          llvm::SmallVector<char> isKept(rec.sizes.size(), 0);
-          for (unsigned idx : recC.keptIdx) {
-            if (idx < isKept.size()) isKept[idx] = 1;
-          }
-
-          bool compatible = true;
-          for (size_t i = 0; i < rec.sizes.size(); ++i) {
-            if (isKept[i]) continue;
-            if (!OpFoldResultEqual(srcR.offs[i], rec.offs[i]) ||
-                !OpFoldResultEqual(srcR.sizes[i], rec.sizes[i]) ||
-                !OpFoldResultEqual(srcR.strides[i], rec.strides[i])) {
-              compatible = false;
-              break;
-            }
-          }
-
-          if (compatible) {
-            auto buildDiff = [&](mlir::OpFoldResult lhs, mlir::OpFoldResult rhs,
-                                 mlir::OpFoldResult* out) -> bool {
-              if (OpFoldResultEqual(lhs, rhs)) {
-                *out = builder.getIndexAttr(0);
-                return true;
-              }
-              auto lhsAttr = lhs.dyn_cast<mlir::Attribute>();
-              auto rhsAttr = rhs.dyn_cast<mlir::Attribute>();
-              auto lhsVal = lhs.dyn_cast<mlir::Value>();
-              auto rhsVal = rhs.dyn_cast<mlir::Value>();
-              if (lhsAttr && rhsAttr) {
-                int64_t v = lhsAttr.cast<mlir::IntegerAttr>().getInt() -
-                            rhsAttr.cast<mlir::IntegerAttr>().getInt();
-                *out = builder.getIndexAttr(v);
-                return true;
-              }
-              if (lhsVal && rhsVal) {
-                *out = builder.create<mlir::arith::SubIOp>(loc, lhsVal, rhsVal).getResult();
-                return true;
-              }
-              if (lhsVal && rhsAttr) {
-                int64_t c = rhsAttr.cast<mlir::IntegerAttr>().getInt();
-                auto cVal = builder.create<mlir::arith::ConstantIndexOp>(loc, c).getResult();
-                *out = builder.create<mlir::arith::SubIOp>(loc, lhsVal, cVal).getResult();
-                return true;
-              }
-              if (lhsAttr && rhsVal) {
-                int64_t c = lhsAttr.cast<mlir::IntegerAttr>().getInt();
-                auto cVal = builder.create<mlir::arith::ConstantIndexOp>(loc, c).getResult();
-                *out = builder.create<mlir::arith::SubIOp>(loc, cVal, rhsVal).getResult();
-                return true;
-              }
-              return false;
-            };
-
-            bool can_use_record = true;
-            llvm::SmallVector<mlir::OpFoldResult> relOffs;
-            llvm::SmallVector<mlir::OpFoldResult> recSizes;
-            llvm::SmallVector<mlir::OpFoldResult> recStrides;
-            relOffs.reserve(recC.keptIdx.size());
-            recSizes.reserve(recC.keptIdx.size());
-            recStrides.reserve(recC.keptIdx.size());
-
-            for (unsigned idx : recC.keptIdx) {
-              mlir::OpFoldResult rel;
-              if (!buildDiff(rec.offs[idx], srcR.offs[idx], &rel)) {
-                can_use_record = false;
-                break;
-              }
-              auto relAttr = rel.dyn_cast<mlir::Attribute>();
-              auto recSizeAttr = rec.sizes[idx].dyn_cast<mlir::Attribute>();
-              auto reqSizeAttr = srcR.sizes[idx].dyn_cast<mlir::Attribute>();
-              if (relAttr && recSizeAttr && reqSizeAttr) {
-                int64_t relV = relAttr.cast<mlir::IntegerAttr>().getInt();
-                int64_t recSz = recSizeAttr.cast<mlir::IntegerAttr>().getInt();
-                int64_t reqSz = reqSizeAttr.cast<mlir::IntegerAttr>().getInt();
-                if (relV < 0 || relV + recSz > reqSz) {
-                  can_use_record = false;
-                  break;
-                }
-              }
-              relOffs.push_back(rel);
-              recSizes.push_back(rec.sizes[idx]);
-              recStrides.push_back(rec.strides[idx]);
-            }
-
-            if (can_use_record) {
-              src_tensor = rec.tensor;
-              post_load_insert_needed = true;
-              post_insert_offs = relOffs;
-              post_insert_sizes = recSizes;
-              post_insert_strides = recStrides;
-
-              auto dstSliceTy = dst_slice.getType().cast<mlir::RankedTensorType>();
-              if (OpFoldResultsAllZero(post_insert_offs) &&
-                  OpFoldResultsEqualStaticShape(post_insert_sizes, dstSliceTy.getShape())) {
-                post_load_insert_needed = false;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if (!src_tensor) {
-      mlir::Value src_view = CreateRankReducedSubviewFromBaseRank(
-          src, srcR.offs, srcR.sizes, srcR.strides, srcC.projected, loc);
-      src_tensor = builder.create<mlir::bufferization::ToTensorOp>(
-          loc, src_view, /*restrict=*/true, /*writable=*/false);
-    }
-
-    auto load_src_tensor_ty = src_tensor.getType().cast<mlir::RankedTensorType>();
-    llvm::SmallVector<mlir::Value> load_out_dyn_dims;
-    for (int64_t i = 0; i < load_src_tensor_ty.getRank(); ++i) {
-      if (load_src_tensor_ty.isDynamicDim(i)) {
-        load_out_dyn_dims.push_back(builder.create<mlir::tensor::DimOp>(loc, src_tensor, i));
-      }
-    }
-    mlir::Value load_out_init = builder.create<mlir::tensor::EmptyOp>(
-        loc, load_src_tensor_ty.getShape(), load_src_tensor_ty.getElementType(),
-        load_out_dyn_dims);
-    mlir::Type load_tensor_type = load_out_init.getType();
-    mlir::TypeRange result_tensors(&load_tensor_type, 1);
-    auto loadOp = builder.create<mlir::hivm::LoadOp>(
-        loc, result_tensors, src_tensor, load_out_init);
-    mlir::Value loaded_tensor = loadOp->getResult(0);
-
-    mlir::Value casted_tensor = post_load_insert_needed
-        ? CreateCastIfTypeMismatch(loaded_tensor, dst_slice)
-        : CreateCastIfTypeMismatch(loaded_tensor, dst);
-    mlir::Value copy_result_slice = casted_tensor;
-    if (post_load_insert_needed) {
-      copy_result_slice = InsertSlice(
-          casted_tensor, dst_slice,
-          post_insert_offs, post_insert_sizes, post_insert_strides);
-    }
+    mlir::Value load_out_buffer = CreateTempMemrefLikeShaped(
+        src_view, mlir::getElementTypeOrSelf(src_view.getType()), loc);
+    builder.create<mlir::hivm::LoadOp>(
+        loc, mlir::TypeRange{}, src_view, load_out_buffer);
+    mlir::Value loaded_tensor = builder.create<mlir::bufferization::ToTensorOp>(
+        loc, load_out_buffer, /*restrict=*/true, /*writable=*/false);
+    mlir::Value copy_result_slice =
+        CreateCastIfTypeMismatch(loaded_tensor, dst_slice);
 
     if (OpFoldResultsAllZero(dstR.offs) &&
         OpFoldResultsEqualStaticShape(dstR.sizes, dst_tensor_type_ori.getShape()) &&
@@ -2001,37 +1827,50 @@ void CodeGenTileLangNPUIRDEV::EmitCopyTensorToMemref(
     bool use_hivm_store,
     bool use_hivm_fixpipe) {
 
-  const bool is_workspace_dst =
-      IsWorkspaceScope(GetPtrStorageScope(npuirop.dst->data));
-
   auto emit_writeback = [&](mlir::Value src_tensor, mlir::Value dst_memref) {
     if (use_hivm_fixpipe || use_hivm_store) {
-      mlir::Value dst_tensor = builder.create<mlir::bufferization::ToTensorOp>(
-          loc, dst_memref, /*restrict=*/true, /*writable=*/true);
-      mlir::Type dst_tensor_type = dst_tensor.getType();
-      mlir::TypeRange result_tensors(&dst_tensor_type, 1);
-
       if (use_hivm_fixpipe) {
+        mlir::Value src_buffer = CreateTempMemrefLikeShaped(
+            src_tensor, mlir::getElementTypeOrSelf(src_tensor.getType()), loc);
+        auto src_mat = builder.create<mlir::bufferization::MaterializeInDestinationOp>(
+            loc, src_tensor, src_buffer);
+        src_mat.setWritable(true);
         mlir::UnitAttr enable_nz2nd = builder.getUnitAttr();
+        auto src_dtype = npuirop.src->dtype;
+        auto dst_dtype = npuirop.dst->dtype;
+        mlir::hivm::FixpipePreQuantMode pre_quant_mode =
+            mlir::hivm::FixpipePreQuantMode::NO_QUANT;
+        if (src_dtype != dst_dtype) {
+          if (src_dtype == DataType::Float(32) &&
+              dst_dtype == DataType::Float(16)) {
+            pre_quant_mode = mlir::hivm::FixpipePreQuantMode::F322F16;
+          } else if (src_dtype == DataType::Float(32) &&
+                     dst_dtype == DataType::BFloat(16)) {
+            pre_quant_mode = mlir::hivm::FixpipePreQuantMode::F322BF16;
+          } else if (src_dtype == DataType::Int(32) &&
+                     dst_dtype == DataType::Int(8)) {
+            pre_quant_mode = mlir::hivm::FixpipePreQuantMode::S322I8;
+          } else {
+            LOG(FATAL) << "Unexpected pre-quant mode in T.copy(L0C, workspace).";
+          }
+        }
         auto pre_quant = mlir::hivm::FixpipePreQuantModeAttr::get(
-            builder.getContext(), mlir::hivm::FixpipePreQuantMode::NO_QUANT);
+            builder.getContext(), pre_quant_mode);
         auto pre_relu = mlir::hivm::FixpipePreReluModeAttr::get(
             builder.getContext(), mlir::hivm::FixpipePreReluMode::NO_RELU);
         mlir::BoolAttr channel_split = builder.getBoolAttr(false);
-        auto fixpipeOp = builder.create<mlir::hivm::FixpipeOp>(
-            loc, result_tensors, src_tensor, dst_tensor, enable_nz2nd,
+        builder.create<mlir::hivm::FixpipeOp>(
+            loc, mlir::TypeRange{}, src_buffer, dst_memref, enable_nz2nd,
             pre_quant, pre_relu, channel_split);
-        if (is_workspace_dst) {
-          workspace_tensor_map_[npuirop.dst->data.get()] = WorkspaceTensorRecord{
-              fixpipeOp->getResult(0), dstR.offs, dstR.sizes, dstR.strides};
-        }
       } else {
-        auto storeOp = builder.create<mlir::hivm::StoreOp>(
-            loc, result_tensors, src_tensor, dst_tensor);
-        if (is_workspace_dst) {
-          workspace_tensor_map_[npuirop.dst->data.get()] = WorkspaceTensorRecord{
-              storeOp->getResult(0), dstR.offs, dstR.sizes, dstR.strides};
-        }
+        mlir::Value casted_tensor = CreateCastIfTypeMismatch(src_tensor, dst_memref);
+        mlir::Value src_buffer = CreateTempMemrefLikeShaped(
+            casted_tensor, mlir::getElementTypeOrSelf(dst_memref.getType()), loc);
+        auto src_mat = builder.create<mlir::bufferization::MaterializeInDestinationOp>(
+            loc, casted_tensor, src_buffer);
+        src_mat.setWritable(true);
+        builder.create<mlir::hivm::StoreOp>(
+            loc, mlir::TypeRange{}, src_buffer, dst_memref);
       }
       return;
     }
@@ -2039,9 +1878,6 @@ void CodeGenTileLangNPUIRDEV::EmitCopyTensorToMemref(
     auto matOp = builder.create<mlir::bufferization::MaterializeInDestinationOp>(
         loc, src_tensor, dst_memref);
     matOp.setWritable(true);
-    if (is_workspace_dst) {
-      workspace_tensor_map_.erase(npuirop.dst->data.get());
-    }
   };
 
   auto srcTy = src.getType().cast<mlir::RankedTensorType>();
@@ -2053,8 +1889,7 @@ void CodeGenTileLangNPUIRDEV::EmitCopyTensorToMemref(
       OpFoldResultsAllZero(dstR.offs) &&
       OpFoldResultsEqualStaticShape(dstR.sizes, dstTy.getShape()) &&
       srcTy.getShape() == dstTy.getShape()) {
-    mlir::Value casted = CreateCastIfTypeMismatch(src, dst);
-    emit_writeback(casted, dst);
+    emit_writeback(src, dst);
     return;
   }
 
@@ -2072,61 +1907,17 @@ void CodeGenTileLangNPUIRDEV::EmitCopyTensorToMemref(
   mlir::Value dst_view = CreateRankReducedSubviewFromBaseRank(
       dst, dstR.offs, dstR.sizes, dstR.strides, copy_projected, loc);
 
-  // 4) Type cast if element types differ
-  mlir::Value casted_tensor = CreateCastIfTypeMismatch(src_slice, dst_view);
-
-  // 5) Write back directly (no reshape needed - shapes match!)
-  emit_writeback(casted_tensor, dst_view);
+  // 4) Write back directly (no reshape needed - shapes match!)
+  emit_writeback(src_slice, dst_view);
 }
 
 void CodeGenTileLangNPUIRDEV::EmitCopyTensorToTensor(
     const tvm::tl::AscendCopy& npuirop,
     mlir::Value src, mlir::Value dst,
     const SliceRange& srcR, const SliceRange& dstR,
-    mlir::Location loc,
-    bool use_hivm_load) {
+    mlir::Location loc) {
   auto srcTy = src.getType().cast<mlir::RankedTensorType>();
   auto dstTy = dst.getType().cast<mlir::RankedTensorType>();
-
-  if (use_hivm_load) {
-    int64_t maxRankTT = std::min<int64_t>(srcTy.getRank(), dstTy.getRank());
-    CollapsedDims srcC = CollapseStaticOneDims(srcR.sizes, maxRankTT);
-    mlir::Value src_slice = CreateRankReducedExtractSlice(
-        src, srcR.offs, srcR.sizes, srcR.strides, srcC.projected, loc);
-    mlir::Value dst_slice = CreateRankReducedExtractSlice(
-        dst, dstR.offs, dstR.sizes, dstR.strides, srcC.projected, loc);
-
-    mlir::Type dst_slice_type = dst_slice.getType();
-    auto dst_slice_tensor_ty = dst_slice_type.cast<mlir::RankedTensorType>();
-    llvm::SmallVector<mlir::Value> load_out_dyn_dims;
-    for (int64_t i = 0; i < dst_slice_tensor_ty.getRank(); ++i) {
-      if (dst_slice_tensor_ty.isDynamicDim(i)) {
-        load_out_dyn_dims.push_back(builder.create<mlir::tensor::DimOp>(loc, dst_slice, i));
-      }
-    }
-    mlir::Value load_out_init = builder.create<mlir::tensor::EmptyOp>(
-        loc, dst_slice_tensor_ty.getShape(), dst_slice_tensor_ty.getElementType(),
-        load_out_dyn_dims);
-    mlir::TypeRange result_tensors(&dst_slice_type, 1);
-    auto loadOp = builder.create<mlir::hivm::LoadOp>(
-        loc, result_tensors, src_slice, load_out_init);
-    mlir::Value loaded_tensor = loadOp->getResult(0);
-
-    if (OpFoldResultsAllZero(dstR.offs) &&
-        OpFoldResultsEqualStaticShape(dstR.sizes, dstTy.getShape()) &&
-        loaded_tensor.getType() == dst.getType()) {
-      SetVarValue(npuirop.dst, loaded_tensor);
-      return;
-    }
-
-    mlir::Value result = InsertSlice(
-        loaded_tensor, dst,
-        const_cast<llvm::SmallVector<mlir::OpFoldResult>&>(dstR.offs),
-        const_cast<llvm::SmallVector<mlir::OpFoldResult>&>(dstR.sizes),
-        const_cast<llvm::SmallVector<mlir::OpFoldResult>&>(dstR.strides));
-    SetVarValue(npuirop.dst, result);
-    return;
-  }
 
   // Fast path: full-range on both sides with same shape
   if (OpFoldResultsAllZero(srcR.offs) &&
@@ -2241,8 +2032,6 @@ void CodeGenTileLangNPUIRDEV::AscendCopyCodegen(const CallNode *op) {
 
   const bool use_hivm_load =
       src_is_workspace && src_is_memref && dst_is_tensor;
-  const bool use_hivm_tensor_load =
-      src_is_workspace && src_is_tensor && dst_is_tensor;
   const bool use_hivm_fixpipe =
       dst_is_workspace && src_is_tensor && dst_is_memref &&
       IsMmadL1ResultValue(src);
@@ -2259,8 +2048,7 @@ void CodeGenTileLangNPUIRDEV::AscendCopyCodegen(const CallNode *op) {
     return;
   }
   if (src_is_tensor && dst_is_tensor) {
-    EmitCopyTensorToTensor(
-        npuirop, src, dst, srcR, dstR, loc, use_hivm_tensor_load);
+    EmitCopyTensorToTensor(npuirop, src, dst, srcR, dstR, loc);
     return;
   }
   if (src_is_memref && dst_is_memref) {
@@ -3916,7 +3704,6 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const AllocateNode *op) {
 
     ICHECK(GetVarValue(op->buffer_var.get()) == mlir::Value{});
     SetVarValue(op->buffer_var.get(), allocOp.getMemref());
-    workspace_tensor_map_.erase(op->buffer_var.get());
 
     this->VisitStmt(op->body);
     return;
@@ -4224,7 +4011,6 @@ void CodeGenTileLangNPUIRDEV::AddFunctionForCoreType(const GlobalVar &gvar,
 
 void CodeGenTileLangNPUIRDEV::InitFuncState() {
   var_map_.clear();
-  workspace_tensor_map_.clear();
   AddVarLayer();
   alias_var_set_.clear();
   analyzer_.reset(new arith::Analyzer());
@@ -4520,22 +4306,6 @@ void CodeGenTileLangNPUIRDEV::LoopCarriedVarCollector::CheckVar(
   }
 }
 
-void CodeGenTileLangNPUIRDEV::LoopCarriedVarCollector::CheckWorkspaceVar(
-    const tir::VarNode *var_node) {
-  if (!workspace_touched_vars_ || !var_node) {
-    return;
-  }
-  if (!IsWorkspaceScope(GetPtrStorageScope(GetRef<tir::Var>(var_node)))) {
-    return;
-  }
-  if (outer_->GetVarValue(var_node) == mlir::Value{} ||
-      workspace_vars_set_.find(var_node) != workspace_vars_set_.end()) {
-    return;
-  }
-  workspace_vars_set_.insert(var_node);
-  workspace_touched_vars_->push_back(var_node);
-}
-
 void CodeGenTileLangNPUIRDEV::LoopCarriedVarCollector::VisitExpr_(
     const tir::CallNode *call) {
   auto process_call_arg = [&](int arg_index) {
@@ -4609,16 +4379,12 @@ void CodeGenTileLangNPUIRDEV::LoopCarriedVarCollector::VisitExpr_(
     CheckVar(npuirop.dst->data.get());
   } else if (call->op.same_as(Op::Get("tl.copy"))) {
     tvm::tl::AscendCopy npuirop(call->args, outer_->vmap);
-    CheckWorkspaceVar(npuirop.dst->data.get());
     mlir::Value dst = outer_->GetVarValue(npuirop.dst);
     if (dst != mlir::Value{}) {
       if (dst.getType().isa<mlir::TensorType>()) {
         CheckVar(npuirop.dst->data.get());
       }
     }
-  } else if (call->op.same_as(Op::Get("tl.npuir_store_fixpipe"))) {
-    tvm::tl::NpuirFixpipe npuirop(call->args, outer_->vmap);
-    CheckWorkspaceVar(npuirop.dst->data.get());
   }
   tir::StmtExprVisitor::VisitExpr_(call);
 }
