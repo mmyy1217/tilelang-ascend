@@ -254,7 +254,7 @@ namespace {
         {"wmma.accumulator", NPU_CORETYPE::AIC},
         {"wmma.matrix_a", NPU_CORETYPE::AIC},
         {"wmma.matrix_b", NPU_CORETYPE::AIC}};
-  
+
   public:
     void VisitStmt(const Stmt &stmt) override {
       StmtExprVisitor::VisitStmt(stmt);
@@ -312,7 +312,7 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src, mlir::Value dst) 
 
   // 2. Try Reinterpret Copy if shape not match but numElements match
   if (src_type.getNumElements() == dst_type.getNumElements()) {
-      
+
     // safety check: stride hack only when elementTypes match
     if (src_type.getElementType() != dst_type.getElementType()) {
       ICHECK(false) << "HandleMemRefReshapeCopy requires same element type.";
@@ -332,7 +332,7 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src, mlir::Value dst) 
 
     for (int i = 0; i < dst_type.getRank(); ++i) {
       int64_t static_dim = dst_type.getDimSize(i);
-      
+
       if (mlir::ShapedType::isDynamic(static_dim)) {
         mlir::Value dim_val = builder.create<mlir::memref::DimOp>(loc, dst, i);
         sizes.push_back(dim_val);
@@ -353,7 +353,7 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src, mlir::Value dst) 
     // Calculate from the lowest dimension (last dimension) to the highest
     for (int i = dst_type.getRank() - 1; i >= 0; --i) {
       int64_t dim_size = dst_type.getDimSize(i);
-      
+
       // Set stride for the current dimension
       if (i == dst_type.getRank() - 1) {
         // The lowest dimension's stride is always 1
@@ -362,7 +362,7 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src, mlir::Value dst) 
         // Normal case
         layout_strides[i] = current_stride;
       }
-      
+
       // Update current_stride for the next dimension (higher dimension)
       if (mlir::ShapedType::isDynamic(dim_size)) {
         all_static_so_far = false;
@@ -384,13 +384,13 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src, mlir::Value dst) 
       // Has dynamic dimensions: need to compute dynamic strides
       // Create a vector to store computed strides (calculated from back to front)
       llvm::SmallVector<mlir::Value> temp_strides(dst_type.getRank());
-      
+
       // Calculate from back to front
       mlir::Value current_dyn_stride = builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
       for (int i = dst_type.getRank() - 1; i >= 0; --i) {
         // Store stride for current dimension
         temp_strides[i] = current_dyn_stride;
-        
+
         if (i > 0) {
           // Update current_dyn_stride for the next dimension (higher dimension)
           // current_dimension_stride * current_dimension_size
@@ -398,7 +398,7 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src, mlir::Value dst) 
               loc, current_dyn_stride, dim_values[i]);
         }
       }
-      
+
       // Convert temp_strides to OpFoldResult and add to strides in order
       for (int i = 0; i < dst_type.getRank(); ++i) {
         strides.push_back(temp_strides[i]);
@@ -407,7 +407,7 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src, mlir::Value dst) 
 
     // 4. Create StridedLayoutAttr
     auto layout = mlir::StridedLayoutAttr::get(
-        &context, 
+        &context,
         mlir::ShapedType::kDynamic,
         layout_strides);
 
@@ -427,7 +427,7 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src, mlir::Value dst) 
         sizes,
         strides
     );
-    
+
     // 7. Copy
     builder.create<mlir::memref::CopyOp>(loc, TypeRange{}, reinterpreted_src, dst);
 
@@ -985,7 +985,7 @@ mlir::Value CodeGenTileLangNPUIRAPI::GenRankReducedSubviewFromRegion(
   // When min_rank > 0, keep leading static-1 dims as needed to satisfy the
   // minimum rank requirement. This ensures GM operands for Cube nd2nz/fixpipe
   // maintain consistent rank (2D) across all calls in the same function.
-  
+
   // 1. Count non-static-1 dims
   int numNonStatic1 = 0;
   for (auto ofr : sizes) {
@@ -1647,9 +1647,9 @@ void CodeGenTileLangNPUIRAPI::DotCodegen(const CallNode *op) {
 
   mlir::Location unknown_loc = builder.getUnknownLoc();
   mlir::IndexType idx_ty = builder.getIndexType();
-  mlir::Value a = GetVarValue(npuirop.src0->data.get());
-  mlir::Value b = GetVarValue(npuirop.src1->data.get());
-  mlir::Value c = GetVarValue(npuirop.dst->data.get());
+  mlir::Value a = GenRankReducedSubviewFromRegion(npuirop.src0->data.get());
+  mlir::Value b = GenRankReducedSubviewFromRegion(npuirop.src1->data.get());
+  mlir::Value c = GenRankReducedSubviewFromRegion(npuirop.dst->data.get());
   mlir::TypeRange result_tensors = {};
   mlir::Value init_condition = MakeValue(npuirop.initC);
   mlir::Value real_m = CreateIndexCastOp(MakeValue(a_region_shape[0]));
@@ -1723,7 +1723,7 @@ template <typename T>
 void CodeGenTileLangNPUIRAPI::CreateHIVMBinaryVectorOp(const CallNode *op) {
   auto processImm = [&](mlir::Value &src, int arg_id,
                         Array<PrimExpr> &buffer_shape) {
-    if (op->args[arg_id].as<IntImm>() || op->args[arg_id].as<FloatImm>() || 
+    if (op->args[arg_id].as<IntImm>() || op->args[arg_id].as<FloatImm>() ||
         op->args[arg_id].as<tir::VarNode>()) {
       // Scalar case
       const CallNode *region_node = op->args[1 - arg_id].as<CallNode>();
@@ -2102,7 +2102,7 @@ void CodeGenTileLangNPUIRAPI::VsinCodegen(const CallNode *op) {
     Value x2 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
     Value x3 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
     Value x5 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
-    Value x7 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);    
+    Value x7 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
     Value tmp = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
 
     builder.create<mlir::hivm::VMulOp>(loc, TypeRange{}, ValueRange{src, src}, ValueRange{x2});
@@ -2167,7 +2167,7 @@ void CodeGenTileLangNPUIRAPI::VerfCodegen(const CallNode *op) {
     Value x2 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
     Value x3 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
     Value x5 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
-    Value x7 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);    
+    Value x7 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
     Value tmp = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
 
     builder.create<mlir::hivm::VMulOp>(loc, TypeRange{}, ValueRange{src, src}, ValueRange{x2});
@@ -2230,7 +2230,7 @@ void CodeGenTileLangNPUIRAPI::VtanhCodegen(const CallNode *op) {
     Value x2 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
     Value x3 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
     Value x5 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
-    Value x7 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);    
+    Value x7 = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
     Value tmp = mlir::utils::createTmpBufferOrTensorWithTargetType(builder, loc, src, elementType);
 
     builder.create<mlir::hivm::VMulOp>(loc, TypeRange{}, ValueRange{src, src}, ValueRange{x2});
