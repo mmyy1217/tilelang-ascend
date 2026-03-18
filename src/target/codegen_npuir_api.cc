@@ -1642,6 +1642,8 @@ void CodeGenTileLangNPUIRAPI::DotCodegen(const CallNode *op) {
   Array<PrimExpr> a_region_shape, b_region_shape;
   for (int i = 0; i < npuirop.src0_range.size(); i++) {
     a_region_shape.push_back(npuirop.src0_range[i].get()->extent);
+  }
+  for (int i = 0; i < npuirop.src1_range.size(); i++) {
     b_region_shape.push_back(npuirop.src1_range[i].get()->extent);
   }
 
@@ -1652,9 +1654,14 @@ void CodeGenTileLangNPUIRAPI::DotCodegen(const CallNode *op) {
   mlir::Value c = GenRankReducedSubviewFromRegion(npuirop.dst, npuirop.dst_range, /*min_rank=*/2);
   mlir::TypeRange result_tensors = {};
   mlir::Value init_condition = MakeValue(npuirop.initC);
-  mlir::Value real_m = CreateIndexCastOp(MakeValue(a_region_shape[0]));
-  mlir::Value real_k = CreateIndexCastOp(MakeValue(b_region_shape[0]));
-  mlir::Value real_n = CreateIndexCastOp(MakeValue(b_region_shape[1]));
+  
+  size_t a_ndim = a_region_shape.size();
+  size_t b_ndim = b_region_shape.size();
+  ICHECK(a_ndim >= 2 && b_ndim >= 2) << "MmadL1 operands must have rank >= 2";
+  
+  mlir::Value real_m = CreateIndexCastOp(MakeValue(npuirop.a_transpose ? a_region_shape[a_ndim - 1] : a_region_shape[a_ndim - 2]));
+  mlir::Value real_k = CreateIndexCastOp(MakeValue(npuirop.a_transpose ? a_region_shape[a_ndim - 2] : a_region_shape[a_ndim - 1]));
+  mlir::Value real_n = CreateIndexCastOp(MakeValue(npuirop.b_transpose ? b_region_shape[b_ndim - 2] : b_region_shape[b_ndim - 1]));
   mlir::Value per_channel_bias = mlir::Value{};
   mlir::UnitAttr a_transpose =
       npuirop.a_transpose ? builder.getUnitAttr() : mlir::UnitAttr();
