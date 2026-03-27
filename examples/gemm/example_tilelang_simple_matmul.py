@@ -24,7 +24,7 @@ def matmul():
         B: T.Tensor((K, N), DTYPE),
         C: T.Tensor((M, N), DTYPE),
     ):
-        with T.Kernel(1, is_npu=True) as (_, _):
+        with T.Kernel(1, is_npu=True) as (pid, sid):
             A_shared = T.alloc_shared((BLOCK_M, BLOCK_K), DTYPE)
             B_shared = T.alloc_shared((BLOCK_K, BLOCK_N), DTYPE)
             C_local = T.alloc_fragment((BLOCK_M, BLOCK_N), ACCUM_DTYPE)

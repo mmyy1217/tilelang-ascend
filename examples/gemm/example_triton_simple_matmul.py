@@ -18,6 +18,7 @@ def matmul_kernel(
     a_ptr,
     b_ptr,
     c_ptr,
+    K,
     stride_am,
     stride_ak,
     stride_bk,
@@ -37,7 +38,7 @@ def matmul_kernel(
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
-    for _ in range(K // BLOCK_K):
+    for _ in range(0, tl.cdiv(K, BLOCK_K)):
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         acc = tl.dot(a, b, acc)
@@ -54,6 +55,7 @@ def matmul(a, b, c):
         a,
         b,
         c,
+        K,
         a.stride(0),
         a.stride(1),
         b.stride(0),
