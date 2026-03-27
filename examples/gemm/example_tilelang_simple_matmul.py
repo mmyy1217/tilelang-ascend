@@ -6,12 +6,9 @@ import tilelang
 import tilelang.language as T
 
 
-M = 128
-N = 128
-K = 128
-BLOCK_M = 128
-BLOCK_N = 128
-BLOCK_K = 32
+M = 16
+N = 16
+K = 16
 DTYPE = "float16"
 ACCUM_DTYPE = "float32"
 
@@ -25,15 +22,13 @@ def matmul():
         C: T.Tensor((M, N), DTYPE),
     ):
         with T.Kernel(1, is_npu=True) as (pid, sid):
-            A_shared = T.alloc_shared((BLOCK_M, BLOCK_K), DTYPE)
-            B_shared = T.alloc_shared((BLOCK_K, BLOCK_N), DTYPE)
-            C_local = T.alloc_fragment((BLOCK_M, BLOCK_N), ACCUM_DTYPE)
+            A_shared = T.alloc_shared((M, K), DTYPE)
+            B_shared = T.alloc_shared((K, N), DTYPE)
+            C_local = T.alloc_fragment((M, N), ACCUM_DTYPE)
 
-            for k in T.serial(K // BLOCK_K):
-                T.copy(A[0, k * BLOCK_K], A_shared)
-                T.copy(B[k * BLOCK_K, 0], B_shared)
-                T.gemm(A_shared, B_shared, C_local, initC=(k == 0))
-
+            T.copy(A[0, 0], A_shared)
+            T.copy(B[0, 0], B_shared)
+            T.gemm(A_shared, B_shared, C_local, initC=True)
             T.copy(C_local, C[0, 0])
 
     return main

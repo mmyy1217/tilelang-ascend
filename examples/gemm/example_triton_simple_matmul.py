@@ -4,12 +4,9 @@ import triton
 import triton.language as tl
 
 
-M = 128
-N = 128
-K = 128
-BLOCK_M = 128
-BLOCK_N = 128
-BLOCK_K = 32
+M = 16
+N = 16
+K = 16
 DTYPE = torch.float16
 
 
@@ -18,7 +15,6 @@ def matmul_kernel(
     a_ptr,
     b_ptr,
     c_ptr,
-    K,
     stride_am,
     stride_ak,
     stride_bk,
@@ -36,14 +32,11 @@ def matmul_kernel(
     a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
     b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
 
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    a = tl.load(a_ptrs)
+    b = tl.load(b_ptrs)
 
-    for _ in range(0, tl.cdiv(K, BLOCK_K)):
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
-        acc = tl.dot(a, b, acc)
-        a_ptrs += BLOCK_K * stride_ak
-        b_ptrs += BLOCK_K * stride_bk
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    acc = tl.dot(a, b, acc)
 
     c = acc.to(tl.float16)
     c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
@@ -55,16 +48,15 @@ def matmul(a, b, c):
         a,
         b,
         c,
-        K,
         a.stride(0),
         a.stride(1),
         b.stride(0),
         b.stride(1),
         c.stride(0),
         c.stride(1),
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
-        BLOCK_K=BLOCK_K,
+        BLOCK_M=M,
+        BLOCK_N=N,
+        BLOCK_K=K,
     )
 
 
