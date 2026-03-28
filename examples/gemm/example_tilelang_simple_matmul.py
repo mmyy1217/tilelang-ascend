@@ -9,7 +9,7 @@ import tilelang.language as T
 M = 16
 N = 16
 K = 16
-DTYPE = "float16"
+DTYPE = "float32"
 ACCUM_DTYPE = "float32"
 
 
@@ -41,9 +41,9 @@ def main():
     torch.manual_seed(0)
     kernel = matmul()
 
-    a = torch.randn((M, K), dtype=torch.float16).npu()
-    b = torch.randn((K, N), dtype=torch.float16).npu()
-    c = torch.empty((M, N), dtype=torch.float16).npu()
+    a = torch.randn((M, K), dtype=torch.float32).npu()
+    b = torch.randn((K, N), dtype=torch.float32).npu()
+    c = torch.empty((M, N), dtype=torch.float32).npu()
 
     kernel(a, b, c)
 

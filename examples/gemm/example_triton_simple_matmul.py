@@ -7,7 +7,7 @@ import triton.language as tl
 M = 16
 N = 16
 K = 16
-DTYPE = torch.float16
+DTYPE = torch.float32
 
 
 @triton.jit
@@ -38,7 +38,7 @@ def matmul_kernel(
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     acc = tl.dot(a, b, acc)
 
-    c = acc.to(tl.float16)
+    c = acc
     c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
     tl.store(c_ptrs, c)
 
