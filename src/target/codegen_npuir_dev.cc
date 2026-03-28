@@ -51,6 +51,7 @@
 #include <mlir/Dialect/Tensor/IR/Tensor.h>
 #include <mlir/Dialect/Utils/StructuredOpsUtils.h>
 #include <mlir/Dialect/Bufferization/IR/Bufferization.h>
+#include <mlir/Dialect/Linalg/IR/Linalg.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
@@ -2657,6 +2658,90 @@ void CodeGenTileLangNPUIRDEV::CreateHIVMBinaryVectorOp(const CallNode *op) {
   SetVarValue(region_node_dst, result);
 }
 
+/// Generate linalg.elemwise_binary for tl.npuir_add (and future binary ops).
+void CodeGenTileLangNPUIRDEV::CreateLinalgBinaryVectorOp(
+    mlir::linalg::BinaryFn fn, const CallNode *op) {
+  auto processImm = [&](mlir::Value &src, int arg_id,
+                        Array<PrimExpr> &buffer_shape) {
+    if (op->args[arg_id].as<IntImm>() || op->args[arg_id].as<FloatImm>() ||
+        op->args[arg_id].as<tir::VarNode>()) {
+      const CallNode *region_node = op->args[1 - arg_id].as<CallNode>();
+      const BufferLoadNode *buffer_load_node =
+          region_node->args[0].as<BufferLoadNode>();
+      if (op->args[arg_id]->dtype != buffer_load_node->buffer->dtype) {
+        src = ScalarConvertType(op->args[arg_id],
+                                buffer_load_node->buffer->dtype);
+      } else {
+        src = MakeValue(op->args[arg_id]);
+      }
+    } else {
+      const CallNode *region_node = op->args[arg_id].as<CallNode>();
+      auto buffer_node = region_node->args[0].as<BufferLoadNode>();
+      Array<PrimExpr> tmp_buffer_shape = buffer_node->buffer->shape;
+      bool is_scalar_load = true;
+      for (int i = 0; i < (int)tmp_buffer_shape.size(); i++) {
+        const IntImmNode *int_imm = region_node->args[2 + i].as<IntImmNode>();
+        if (!int_imm || int_imm->value != 1) {
+          is_scalar_load = false;
+          break;
+        }
+      }
+      if (is_scalar_load) {
+        src = VisitExpr_(buffer_node);
+      } else {
+        src = GenExtractSliceFromRegion(region_node);
+        auto tensorType = src.getType().dyn_cast<mlir::TensorType>();
+        buffer_shape.clear();
+        for (int64_t dim : tensorType.getShape()) {
+          ICHECK(dim >= 0) << "dynamic tensor shape not supported yet";
+          buffer_shape.push_back(tir::make_const(DataType::Int(64), dim));
+        }
+      }
+    }
+  };
+
+  mlir::Value src0, src1;
+  Array<PrimExpr> buffer_shape0, buffer_shape1;
+  processImm(src0, 0, buffer_shape0);
+  processImm(src1, 1, buffer_shape1);
+
+  const CallNode *region_node_dst = op->args[2].as<CallNode>();
+  tvm::tl::RegionOp region_dst_tmp(region_node_dst->args, vmap);
+  Array<Range> dst_range = region_dst_tmp.GetRanges();
+
+  mlir::Value insertBase =
+      NeedGenInsertSlice(region_dst_tmp.GetBuffer(), dst_range, src0);
+  bool needInsertSlice = (insertBase != GetVarValue(region_node_dst));
+
+  auto loc = builder.getUnknownLoc();
+
+  // Build output tensor: fresh empty for the non-slice case, insertBase otherwise.
+  mlir::Value outTensor;
+  if (needInsertSlice) {
+    outTensor = insertBase;
+  } else {
+    auto tensorType = src0.getType().cast<mlir::TensorType>();
+    outTensor = builder
+                    .create<mlir::tensor::EmptyOp>(
+                        loc, tensorType.getShape(), tensorType.getElementType())
+                    .getResult();
+  }
+
+  auto attr = builder.getAttr<mlir::linalg::BinaryFnAttr>(fn);
+  auto fnAttr = builder.getNamedAttr("fun", attr);
+  auto newOp = builder.create<mlir::linalg::ElemwiseBinaryOp>(
+      loc, mlir::ValueRange{src0, src1}, mlir::ValueRange{outTensor}, fnAttr);
+  mlir::Value newOpValue = newOp->getResult(0);
+
+  mlir::Value result =
+      needInsertSlice
+          ? ReshapeCastAndInsertSlice(newOpValue, GetVarValue(region_node_dst),
+                                      dst_range)
+          : newOpValue;
+
+  SetVarValue(region_node_dst, result);
+}
+
 void CodeGenTileLangNPUIRDEV::BitcastCodegen(const CallNode *op) {
   tvm::tl::NpuirBitcast npuirop(op->args, this->vmap);
 
@@ -3139,7 +3224,7 @@ mlir::Value CodeGenTileLangNPUIRDEV::VisitExpr_(const CallNode *op) {
   } else if (op->op.same_as(Op::Get("tl.copy"))) {
     AscendCopyCodegen(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_add"))) {
-    CreateHIVMBinaryVectorOp<mlir::hivm::VAddOp>(op);
+    CreateLinalgBinaryVectorOp(mlir::linalg::BinaryFn::add, op);
   } else if (op->op.same_as(Op::Get("tl.npuir_exp"))) {
     UnaryVecOpCodegen<tvm::tl::NpuirExp, mlir::hivm::VExpOp>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_ln"))) {

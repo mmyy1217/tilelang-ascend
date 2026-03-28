@@ -36,6 +36,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 
 //===----------------------------------------------------------------------===//
 // HIVM Dialect
@@ -264,6 +265,7 @@ private:
   void DebugPrintCodegen(const CallNode *op);
   void ReshapeCodegen(const CallNode *op);
   template <typename T> void CreateHIVMBinaryVectorOp(const CallNode *op);
+  void CreateLinalgBinaryVectorOp(mlir::linalg::BinaryFn fn, const CallNode *op);
   template <typename T, typename U> void UnaryVecOpCodegen(const CallNode *op);
   void BarrierCodegen(const CallNode *op);
   void VselectCodegen(const CallNode *op);
