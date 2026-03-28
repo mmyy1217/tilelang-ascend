@@ -3722,6 +3722,29 @@ void CodeGenTileLangNPUIRDEV::AddFunctionForCoreType(const GlobalVar &gvar,
     funcOp->setAttr("mix_mode", builder.getStringAttr(
                                     NPU_CORETYPE_STR[this->current_coretype]));
   }
+
+  // Set parallel_mode = "simd" to enable vectorization passes in Triton
+  funcOp->setAttr("parallel_mode", builder.getStringAttr("simd"));
+
+  // Set tt.tensor_kind and tt.divisibility for buffer parameters
+  for (int i = 0; i < f->params.size(); ++i) {
+    tir::Var v = f->params[i];
+    if (v.dtype().is_handle()) {
+        int argIdx = i + funcArgsOffset;
+        
+        // Simple heuristic for tensor_kind: If it's the last buffer or its name contains "out", it's Output (1), else Input (0).
+        // Since TVM doesn't explicitly mark in/out in function signature, we use a basic heuristic.
+        int tensor_kind = 0;
+        if (i == f->params.size() - 1 || v->name_hint.find("out") != std::string::npos) {
+            tensor_kind = 1;
+        }
+        
+        funcOp.setArgAttr(argIdx, "tt.tensor_kind", builder.getI32IntegerAttr(tensor_kind));
+        // Set a default divisibility of 16 (common for Ascend vectorization)
+        funcOp.setArgAttr(argIdx, "tt.divisibility", builder.getI32IntegerAttr(16));
+    }
+  }
+
   // Call VisitStmt on function body
   this->VisitStmt(f->body);
   builder.create<func::ReturnOp>(builder.getUnknownLoc());
