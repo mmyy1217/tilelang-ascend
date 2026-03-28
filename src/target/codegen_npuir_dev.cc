@@ -1698,7 +1698,7 @@ void CodeGenTileLangNPUIRDEV::EmitCopyMemrefToTensor(
 
   // 6) ToTensor
   mlir::Value loaded_tensor = builder.create<mlir::bufferization::ToTensorOp>(
-      loc, ub_view, /*restrict=*/true, /*writable=*/false);
+      loc, ub_view, /*restrict=*/true, /*writable=*/true);
 
   // 7) Type Cast (skip reshape - let InsertSlice handle rank difference to avoid
   //    expand_shape failures on strided memrefs from subview)
@@ -1992,14 +1992,21 @@ mlir::Value CodeGenTileLangNPUIRDEV::NeedGenInsertSlice(
     strides_val.push_back(builder.getI64IntegerAttr(1));
   }
 
-  auto srcTensorTy = src.getType().cast<mlir::TensorType>();
   auto dstTensorTy = GetVarValue(buffer_data).getType().cast<mlir::TensorType>();
   auto elemTy = dstTensorTy.getElementType();
-  auto srcShape = srcTensorTy.getShape();
-  
+
+  SmallVector<int64_t> resultShape;
+  for (Range r : range) {
+    if (auto s_int = as_const_int(r.get()->extent)) {
+      resultShape.push_back(*s_int);
+    } else {
+      resultShape.push_back(mlir::ShapedType::kDynamic);
+    }
+  }
+
   auto emptyTensor = builder.create<mlir::tensor::EmptyOp>(
       builder.getUnknownLoc(),
-      srcShape,
+      resultShape,
       elemTy);
 
   return emptyTensor.getResult();
@@ -2720,17 +2727,30 @@ void CodeGenTileLangNPUIRDEV::CreateLinalgBinaryVectorOp(
   if (needInsertSlice) {
     outTensor = insertBase;
   } else {
-    auto tensorType = src0.getType().cast<mlir::TensorType>();
+    auto tensorType = insertBase.getType().cast<mlir::TensorType>();
     outTensor = builder
                     .create<mlir::tensor::EmptyOp>(
                         loc, tensorType.getShape(), tensorType.getElementType())
                     .getResult();
   }
 
+  auto ensureTensorOfShape = [&](mlir::Value val, mlir::Value outTensor) -> mlir::Value {
+    if (val.getType().isa<mlir::TensorType>()) {
+      return val;
+    } else {
+      auto tensorType = outTensor.getType().cast<mlir::TensorType>();
+      auto emptyOp = builder.create<mlir::tensor::EmptyOp>(loc, tensorType.getShape(), tensorType.getElementType());
+      return builder.create<mlir::linalg::FillOp>(loc, mlir::ValueRange{val}, mlir::ValueRange{emptyOp.getResult()}).getResult(0);
+    }
+  };
+
+  mlir::Value tensorSrc0 = ensureTensorOfShape(src0, outTensor);
+  mlir::Value tensorSrc1 = ensureTensorOfShape(src1, outTensor);
+
   auto attr = builder.getAttr<mlir::linalg::BinaryFnAttr>(fn);
   auto fnAttr = builder.getNamedAttr("fun", attr);
   auto newOp = builder.create<mlir::linalg::ElemwiseBinaryOp>(
-      loc, mlir::ValueRange{src0, src1}, mlir::ValueRange{outTensor}, fnAttr);
+      loc, mlir::ValueRange{tensorSrc0, tensorSrc1}, mlir::ValueRange{outTensor}, fnAttr);
   mlir::Value newOpValue = newOp->getResult(0);
 
   mlir::Value result =
