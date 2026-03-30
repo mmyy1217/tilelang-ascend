@@ -1334,6 +1334,13 @@ class compiler_npu:
     def _npuir_to_bin_enable_npu_compile(self):
         linalg = self.mlir_content
         metadata = self.metadata
+        
+        custom_npuir_path = os.environ.get("TILELANG_CUSTOM_NPUIR_PATH", None)
+        if custom_npuir_path and os.path.exists(custom_npuir_path):
+            with open(custom_npuir_path, "r") as f:
+                linalg = f.read()
+            print(f"[TileLang] Loaded custom NPUIR from {custom_npuir_path}")
+
         with tempfile.TemporaryDirectory() as tmpdir:
             ttadapter_path = os.path.join(tmpdir, "kernel.npuir")
             Path(ttadapter_path).write_text(linalg)
