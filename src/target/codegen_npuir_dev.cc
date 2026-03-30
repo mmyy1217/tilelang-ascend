@@ -3735,7 +3735,7 @@ void CodeGenTileLangNPUIRDEV::AddFunctionForCoreType(const GlobalVar &gvar,
         // Simple heuristic for tensor_kind: If it's the last buffer or its name contains "out", it's Output (1), else Input (0).
         // Since TVM doesn't explicitly mark in/out in function signature, we use a basic heuristic.
         int tensor_kind = 0;
-        if (i == f->params.size() - 1 || v->name_hint.find("out") != std::string::npos) {
+        if (i == f->params.size() - 1 || std::string(v->name_hint).find("out") != std::string::npos) {
             tensor_kind = 1;
         }
         
