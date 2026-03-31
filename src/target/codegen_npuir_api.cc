@@ -441,6 +441,39 @@ static bool TryComputeSingletonOnlyReshapeStrides(
     return false;
   }
 
+  // Compute contiguous row-major strides from the dst shape.
+  // Data entering SmartMemRefCopy is contiguous row-major, so we can safely
+  // derive strides from the destination shape rather than propagating
+  // potentially-dynamic strides from the source SubView.
+  llvm::SmallVector<int64_t> contiguousStaticStrides(dstType.getRank());
+  llvm::SmallVector<mlir::OpFoldResult> contiguousStrideOFRs(dstType.getRank());
+  {
+    int64_t runningProduct = 1;
+    bool allStatic = true;
+    for (int i = dstType.getRank() - 1; i >= 0; --i) {
+      if (allStatic) {
+        contiguousStaticStrides[i] = runningProduct;
+        contiguousStrideOFRs[i] = builder.getIndexAttr(runningProduct);
+      } else {
+        contiguousStaticStrides[i] = mlir::ShapedType::kDynamic;
+        // For dynamic strides, compute at runtime using dstSizes
+        mlir::Value strideVal =
+            builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
+        for (int j = dstType.getRank() - 1; j > i; --j) {
+          mlir::Value dimVal = GetIndexValueFromOFR(builder, loc, dstSizes[j]);
+          strideVal =
+              builder.create<mlir::arith::MulIOp>(loc, strideVal, dimVal);
+        }
+        contiguousStrideOFRs[i] = strideVal;
+      }
+      if (dstShape[i] == mlir::ShapedType::kDynamic) {
+        allStatic = false;
+      } else if (allStatic) {
+        runningProduct *= dstShape[i];
+      }
+    }
+  }
+
   for (auto [dstIdx, group] : llvm::enumerate(reassociation)) {
     int strideSrcIdx = group.back();
     for (int srcIdx : group) {
@@ -449,8 +482,26 @@ static bool TryComputeSingletonOnlyReshapeStrides(
         break;
       }
     }
-    resultStrides[dstIdx] = srcStrideOFRs[strideSrcIdx];
-    resultStaticStrides[dstIdx] = srcStaticStrides[strideSrcIdx];
+    // Prefer contiguous strides computed from dst shape over potentially-dynamic
+    // source strides. Use source strides only when they are known static and
+    // the contiguous stride is dynamic.
+    bool srcStrideIsStatic =
+        srcStaticStrides[strideSrcIdx] != mlir::ShapedType::kDynamic;
+    bool contiguousIsStatic =
+        contiguousStaticStrides[dstIdx] != mlir::ShapedType::kDynamic;
+    if (contiguousIsStatic) {
+      // Contiguous stride is static — always preferred.
+      resultStrides[dstIdx] = contiguousStrideOFRs[dstIdx];
+      resultStaticStrides[dstIdx] = contiguousStaticStrides[dstIdx];
+    } else if (srcStrideIsStatic) {
+      // Contiguous is dynamic but source is static — use source.
+      resultStrides[dstIdx] = srcStrideOFRs[strideSrcIdx];
+      resultStaticStrides[dstIdx] = srcStaticStrides[strideSrcIdx];
+    } else {
+      // Both dynamic — use the contiguous runtime computation.
+      resultStrides[dstIdx] = contiguousStrideOFRs[dstIdx];
+      resultStaticStrides[dstIdx] = contiguousStaticStrides[dstIdx];
+    }
   }
   return true;
 }
@@ -487,6 +538,167 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src,
     auto extractOp =
         builder.create<mlir::memref::ExtractStridedMetadataOp>(loc, src);
     mlir::Value offsetValue = extractOp.getOffset();
+
+    // 0. Attempt rank reduction to simplify copies and avoid dynamic stride issues in dummy dimensions.
+    auto RankReduce = [&](mlir::Value val) -> mlir::Value {
+      auto type = val.getType().cast<mlir::MemRefType>();
+      auto shape = type.getShape();
+      llvm::SmallVector<int64_t> reducedStaticShape;
+      llvm::SmallVector<mlir::OpFoldResult> reducedSizes;
+      llvm::SmallVector<mlir::OpFoldResult> reducedStrides;
+      llvm::SmallVector<int64_t> staticStridesInLayout;
+
+      auto metadata = (val == src) ? extractOp : builder.create<mlir::memref::ExtractStridedMetadataOp>(loc, val);
+      auto runtimeStrides = metadata.getStrides();
+      int64_t staticOffset;
+      llvm::SmallVector<int64_t> staticStrides;
+      if (failed(mlir::getStridesAndOffset(type, staticStrides, staticOffset))) {
+        return val;
+      }
+      (void)staticOffset;
+
+      // Collect non-unit dimensions and compute contiguous strides.
+      // For contiguous row-major data, the innermost kept dimension always
+      // has stride 1, so we force it rather than propagating a dynamic stride.
+      // First pass: collect which dimensions to keep.
+      llvm::SmallVector<int> keptDims;
+      for (int i = 0; i < type.getRank(); ++i) {
+        if (shape[i] != 1) {
+          keptDims.push_back(i);
+        }
+      }
+
+      // Second pass: compute contiguous strides from kept shapes (right-to-left product).
+      llvm::SmallVector<int64_t> contiguousKeptStrides(keptDims.size());
+      {
+        int64_t runningProduct = 1;
+        bool allStatic = true;
+        for (int k = static_cast<int>(keptDims.size()) - 1; k >= 0; --k) {
+          contiguousKeptStrides[k] = allStatic ? runningProduct : mlir::ShapedType::kDynamic;
+          int origDim = keptDims[k];
+          if (mlir::ShapedType::isDynamic(shape[origDim])) {
+            allStatic = false;
+          } else if (allStatic) {
+            runningProduct *= shape[origDim];
+          }
+        }
+      }
+
+      // Third pass: build reduced shape, sizes, and strides.
+      for (int k = 0; k < static_cast<int>(keptDims.size()); ++k) {
+        int i = keptDims[k];
+        reducedStaticShape.push_back(shape[i]);
+        if (mlir::ShapedType::isDynamic(shape[i])) {
+          reducedSizes.push_back(builder.create<mlir::memref::DimOp>(loc, val, i).getResult());
+        } else {
+          reducedSizes.push_back(builder.getIndexAttr(shape[i]));
+        }
+        // Use contiguous stride if it's static; otherwise fall back to runtime stride.
+        if (contiguousKeptStrides[k] != mlir::ShapedType::kDynamic) {
+          reducedStrides.push_back(builder.getIndexAttr(contiguousKeptStrides[k]));
+          staticStridesInLayout.push_back(contiguousKeptStrides[k]);
+        } else if (staticStrides[i] != mlir::ShapedType::kDynamic) {
+          reducedStrides.push_back(builder.getIndexAttr(staticStrides[i]));
+          staticStridesInLayout.push_back(staticStrides[i]);
+        } else {
+          reducedStrides.push_back(runtimeStrides[i]);
+          staticStridesInLayout.push_back(mlir::ShapedType::kDynamic);
+        }
+      }
+      if (reducedStaticShape.size() == type.getRank()) return val;
+      if (reducedStaticShape.empty()) {
+        reducedStaticShape.push_back(1);
+        reducedSizes.push_back(builder.getIndexAttr(1));
+        reducedStrides.push_back(builder.getIndexAttr(1));
+        staticStridesInLayout.push_back(1);
+      }
+      auto layout = mlir::StridedLayoutAttr::get(&context, mlir::ShapedType::kDynamic, staticStridesInLayout);
+      auto reducedType = mlir::MemRefType::get(reducedStaticShape, type.getElementType(), layout, type.getMemorySpace());
+      return builder.create<mlir::memref::ReinterpretCastOp>(loc, reducedType, val, metadata.getOffset(), reducedSizes, reducedStrides).getResult();
+    };
+
+    mlir::Value reducedSrc = RankReduce(src);
+    mlir::Value reducedDst = RankReduce(dst);
+    if (reducedSrc != src || reducedDst != dst) {
+      auto reducedSrcType = reducedSrc.getType().cast<mlir::MemRefType>();
+      auto reducedDstType = reducedDst.getType().cast<mlir::MemRefType>();
+      if (reducedSrcType.getShape() == reducedDstType.getShape()) {
+        // Verify stride compatibility before copying: if the reduced source
+        // has dynamic strides but the destination has static strides, reinterpret
+        // the source with contiguous strides matching the destination's layout.
+        llvm::SmallVector<int64_t> srcReducedStrides;
+        llvm::SmallVector<int64_t> dstReducedStrides;
+        int64_t srcOff, dstOff;
+        bool srcStridesOk = succeeded(mlir::getStridesAndOffset(reducedSrcType, srcReducedStrides, srcOff));
+        bool dstStridesOk = succeeded(mlir::getStridesAndOffset(reducedDstType, dstReducedStrides, dstOff));
+
+        bool needReinterpret = false;
+        if (srcStridesOk && dstStridesOk) {
+          for (int i = 0; i < static_cast<int>(srcReducedStrides.size()); ++i) {
+            if (srcReducedStrides[i] == mlir::ShapedType::kDynamic &&
+                dstReducedStrides[i] != mlir::ShapedType::kDynamic) {
+              needReinterpret = true;
+              break;
+            }
+          }
+        }
+
+        if (needReinterpret) {
+          // Reinterpret the source with contiguous strides computed from its shape.
+          auto metadata = (reducedSrc == src) ? extractOp :
+              builder.create<mlir::memref::ExtractStridedMetadataOp>(loc, reducedSrc);
+          llvm::SmallVector<mlir::OpFoldResult> reinterpSizes;
+          llvm::SmallVector<mlir::OpFoldResult> reinterpStrides;
+          llvm::SmallVector<int64_t> reinterpStaticStrides(reducedSrcType.getRank());
+          auto rShape = reducedSrcType.getShape();
+          int64_t runningProduct = 1;
+          bool allStatic = true;
+          for (int i = reducedSrcType.getRank() - 1; i >= 0; --i) {
+            if (allStatic) {
+              reinterpStaticStrides[i] = runningProduct;
+              reinterpStrides.insert(reinterpStrides.begin(), builder.getIndexAttr(runningProduct));
+            } else {
+              reinterpStaticStrides[i] = mlir::ShapedType::kDynamic;
+              // Compute runtime stride
+              mlir::Value strideVal = builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
+              for (int j = reducedSrcType.getRank() - 1; j > i; --j) {
+                mlir::Value dimVal;
+                if (!mlir::ShapedType::isDynamic(rShape[j])) {
+                  dimVal = builder.create<mlir::arith::ConstantIndexOp>(loc, rShape[j]);
+                } else {
+                  dimVal = builder.create<mlir::memref::DimOp>(loc, reducedSrc, j);
+                }
+                strideVal = builder.create<mlir::arith::MulIOp>(loc, strideVal, dimVal);
+              }
+              reinterpStrides.insert(reinterpStrides.begin(), strideVal);
+            }
+            if (mlir::ShapedType::isDynamic(rShape[i])) {
+              allStatic = false;
+            } else if (allStatic) {
+              runningProduct *= rShape[i];
+            }
+          }
+          for (int i = 0; i < reducedSrcType.getRank(); ++i) {
+            if (mlir::ShapedType::isDynamic(rShape[i])) {
+              reinterpSizes.push_back(builder.create<mlir::memref::DimOp>(loc, reducedSrc, i).getResult());
+            } else {
+              reinterpSizes.push_back(builder.getIndexAttr(rShape[i]));
+            }
+          }
+          auto reinterpLayout = mlir::StridedLayoutAttr::get(
+              &context, mlir::ShapedType::kDynamic, reinterpStaticStrides);
+          auto reinterpType = mlir::MemRefType::get(
+              rShape, reducedSrcType.getElementType(), reinterpLayout,
+              reducedSrcType.getMemorySpace());
+          reducedSrc = builder.create<mlir::memref::ReinterpretCastOp>(
+              loc, reinterpType, reducedSrc, metadata.getOffset(),
+              reinterpSizes, reinterpStrides).getResult();
+        }
+
+        builder.create<mlir::memref::CopyOp>(loc, TypeRange{}, reducedSrc, reducedDst);
+        return;
+      }
+    }
 
     llvm::SmallVector<mlir::OpFoldResult> offsets;
     offsets.push_back(offsetValue);
