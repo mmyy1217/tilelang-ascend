@@ -50,6 +50,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
+#include <mlir/Dialect/MemRef/Utils/MemRefUtils.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
@@ -297,6 +298,170 @@ CodeGenTileLangNPUIRAPI
 ******************************************************************************************
 ******************************************************************************************/
 
+static mlir::Value GetIndexValueFromOFR(mlir::OpBuilder &builder,
+                                        mlir::Location loc,
+                                        mlir::OpFoldResult ofr) {
+  if (auto attr = ofr.dyn_cast<mlir::Attribute>()) {
+    return builder.create<mlir::arith::ConstantIndexOp>(
+        loc, attr.cast<mlir::IntegerAttr>().getInt());
+  }
+  return ofr.get<mlir::Value>();
+}
+
+static mlir::OpFoldResult MultiplyIndexOFR(mlir::OpBuilder &builder,
+                                           mlir::Location loc,
+                                           mlir::OpFoldResult lhs,
+                                           mlir::OpFoldResult rhs) {
+  auto lhsAttr = lhs.dyn_cast<mlir::Attribute>();
+  auto rhsAttr = rhs.dyn_cast<mlir::Attribute>();
+  if (lhsAttr && rhsAttr) {
+    int64_t lhsInt = lhsAttr.cast<mlir::IntegerAttr>().getInt();
+    int64_t rhsInt = rhsAttr.cast<mlir::IntegerAttr>().getInt();
+    return builder.getIndexAttr(lhsInt * rhsInt);
+  }
+
+  mlir::Value lhsValue = GetIndexValueFromOFR(builder, loc, lhs);
+  mlir::Value rhsValue = GetIndexValueFromOFR(builder, loc, rhs);
+  return builder.create<mlir::arith::MulIOp>(loc, lhsValue, rhsValue)
+      .getResult();
+}
+
+static bool SingletonGroupMatchesDim(int64_t dim,
+                                     llvm::ArrayRef<int64_t> groupShape) {
+  llvm::SmallVector<int64_t> nonUnitDims;
+  for (int64_t groupDim : groupShape) {
+    if (groupDim != 1) {
+      nonUnitDims.push_back(groupDim);
+    }
+  }
+
+  if (dim == 1) {
+    return nonUnitDims.empty();
+  }
+
+  return nonUnitDims.size() == 1 && nonUnitDims.front() == dim;
+}
+
+static bool BuildSingletonExpandReassociation(
+    llvm::ArrayRef<int64_t> srcShape, llvm::ArrayRef<int64_t> dstShape,
+    int srcIdx, int dstIdx,
+    llvm::SmallVector<mlir::ReassociationIndices> &reassociation) {
+  if (srcIdx == static_cast<int>(srcShape.size())) {
+    return dstIdx == static_cast<int>(dstShape.size());
+  }
+  if (dstIdx == static_cast<int>(dstShape.size())) {
+    return false;
+  }
+
+  int remainingSrc = static_cast<int>(srcShape.size()) - srcIdx;
+  int remainingDst = static_cast<int>(dstShape.size()) - dstIdx;
+  if (remainingDst < remainingSrc) {
+    return false;
+  }
+
+  for (int end = dstIdx; end < static_cast<int>(dstShape.size()); ++end) {
+    if (!SingletonGroupMatchesDim(srcShape[srcIdx],
+                                  dstShape.slice(dstIdx, end - dstIdx + 1))) {
+      continue;
+    }
+
+    mlir::ReassociationIndices group;
+    for (int idx = dstIdx; idx <= end; ++idx) {
+      group.push_back(idx);
+    }
+    reassociation.push_back(group);
+    if (BuildSingletonExpandReassociation(srcShape, dstShape, srcIdx + 1,
+                                          end + 1, reassociation)) {
+      return true;
+    }
+    reassociation.pop_back();
+  }
+
+  return false;
+}
+
+static bool TryComputeSingletonOnlyReshapeStrides(
+    mlir::OpBuilder &builder, mlir::Location loc, mlir::MemRefType srcType,
+    mlir::MemRefType dstType, llvm::ArrayRef<mlir::OpFoldResult> dstSizes,
+    llvm::ArrayRef<mlir::OpFoldResult> srcStrideOFRs,
+    llvm::SmallVector<int64_t> &resultStaticStrides,
+    llvm::SmallVector<mlir::OpFoldResult> &resultStrides) {
+  llvm::SmallVector<int64_t> srcStaticStrides;
+  int64_t offset;
+  if (failed(mlir::getStridesAndOffset(srcType, srcStaticStrides, offset))) {
+    return false;
+  }
+  (void)offset;
+
+  auto srcShape = srcType.getShape();
+  auto dstShape = dstType.getShape();
+
+  if (srcType.getRank() == dstType.getRank()) {
+    return false;
+  }
+
+  resultStaticStrides.assign(dstType.getRank(), mlir::ShapedType::kDynamic);
+  resultStrides.assign(dstType.getRank(), builder.getIndexAttr(1));
+
+  if (srcType.getRank() < dstType.getRank()) {
+    llvm::SmallVector<mlir::ReassociationIndices> reassociation;
+    if (!BuildSingletonExpandReassociation(srcShape, dstShape, 0, 0,
+                                           reassociation)) {
+      return false;
+    }
+
+    for (auto [srcIdx, group] : llvm::enumerate(reassociation)) {
+      mlir::OpFoldResult runningStride = srcStrideOFRs[srcIdx];
+      int64_t runningStaticStride = srcStaticStrides[srcIdx];
+      for (int groupPos = static_cast<int>(group.size()) - 1; groupPos >= 0;
+           --groupPos) {
+        int dstIdx = group[groupPos];
+        resultStrides[dstIdx] = runningStride;
+        resultStaticStrides[dstIdx] = runningStaticStride;
+        if (groupPos == 0) {
+          continue;
+        }
+
+        runningStride =
+            MultiplyIndexOFR(builder, loc, runningStride, dstSizes[dstIdx]);
+        if (runningStaticStride == mlir::ShapedType::kDynamic ||
+            dstShape[dstIdx] == mlir::ShapedType::kDynamic) {
+          runningStaticStride = mlir::ShapedType::kDynamic;
+        } else {
+          runningStaticStride *= dstShape[dstIdx];
+        }
+      }
+    }
+    return true;
+  }
+
+  llvm::SmallVector<mlir::ReassociationIndices> reassociation;
+  if (!BuildSingletonExpandReassociation(dstShape, srcShape, 0, 0,
+                                         reassociation)) {
+    return false;
+  }
+
+  for (auto [dstIdx, group] : llvm::enumerate(reassociation)) {
+    int strideSrcIdx = group.back();
+    for (int srcIdx : group) {
+      if (srcShape[srcIdx] != 1) {
+        strideSrcIdx = srcIdx;
+        break;
+      }
+    }
+    resultStrides[dstIdx] = srcStrideOFRs[strideSrcIdx];
+    resultStaticStrides[dstIdx] = srcStaticStrides[strideSrcIdx];
+  }
+  return true;
+}
+
+static std::string MlirTypeToString(mlir::Type type) {
+  std::string buffer;
+  llvm::raw_string_ostream os(buffer);
+  os << type;
+  return buffer;
+}
+
 void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src,
                                               mlir::Value dst) {
   auto src_type = src.getType().cast<mlir::MemRefType>();
@@ -343,6 +508,47 @@ void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src,
             builder.create<mlir::arith::ConstantIndexOp>(loc, static_dim));
       }
     }
+
+    llvm::SmallVector<int64_t> srcStaticStrides;
+    int64_t offset;
+    if (succeeded(
+            mlir::getStridesAndOffset(src_type, srcStaticStrides, offset))) {
+      (void)offset;
+      llvm::SmallVector<mlir::OpFoldResult> srcStrideOFRs;
+      srcStrideOFRs.reserve(src_type.getRank());
+      auto extractedStrides = extractOp.getStrides();
+      for (int i = 0; i < src_type.getRank(); ++i) {
+        if (srcStaticStrides[i] == mlir::ShapedType::kDynamic) {
+          srcStrideOFRs.push_back(extractedStrides[i]);
+        } else {
+          srcStrideOFRs.push_back(builder.getIndexAttr(srcStaticStrides[i]));
+        }
+      }
+
+      llvm::SmallVector<int64_t> reshapedStaticStrides;
+      llvm::SmallVector<mlir::OpFoldResult> reshapedStrides;
+      if (TryComputeSingletonOnlyReshapeStrides(
+              builder, loc, src_type, dst_type, sizes, srcStrideOFRs,
+              reshapedStaticStrides, reshapedStrides)) {
+        auto layout = mlir::StridedLayoutAttr::get(
+            &context, mlir::ShapedType::kDynamic, reshapedStaticStrides);
+        mlir::MemRefType reshapedDstType = mlir::MemRefType::get(
+            dst_type.getShape(), dst_type.getElementType(), layout,
+            src_type.getMemorySpace());
+
+        mlir::Value reinterpreted_src =
+            builder.create<mlir::memref::ReinterpretCastOp>(
+                loc, reshapedDstType, src, offsets, sizes, reshapedStrides);
+        builder.create<mlir::memref::CopyOp>(loc, TypeRange{},
+                                             reinterpreted_src, dst);
+        return;
+      }
+    }
+
+    ICHECK(mlir::memref::isStaticShapeAndContiguousRowMajor(src_type))
+        << "SmartMemRefCopy only supports singleton-dim rank reshapes for "
+           "non-contiguous sources. src="
+        << MlirTypeToString(src_type) << ", dst=" << MlirTypeToString(dst_type);
 
     // 2. Compute strides for StridedLayoutAttr
     // Rule: Calculate from the last dimension to the first. When encountering a
@@ -1232,9 +1438,9 @@ void CodeGenTileLangNPUIRAPI::AscendCopyCodegen(const CallNode *op) {
   }
 
   mlir::Value src_sub_view =
-      GenRankReducedSubviewFromRegion(npuirop.src, npuirop.src_range);
+      GenSubviewFromRegion(npuirop.src, npuirop.src_range);
   mlir::Value dst_sub_view =
-      GenRankReducedSubviewFromRegion(npuirop.dst, npuirop.dst_range);
+      GenSubviewFromRegion(npuirop.dst, npuirop.dst_range);
   SmartMemRefCopy(src_sub_view, dst_sub_view);
 }
 

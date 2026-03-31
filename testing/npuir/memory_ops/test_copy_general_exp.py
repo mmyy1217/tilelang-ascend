@@ -40,6 +40,12 @@ SLICE_4D_2D_BUF_CASES = [
 STRIDED_2D_CASES = [
     (96, 64, 3, 8),
 ]
+NON_CONTIGUOUS_RANK_MISMATCH_CASES = [
+    (512, 512, 128, 256),
+]
+TRAILING_UNIT_DIM_CASES = [
+    64,
+]
 
 
 def vector_copy_via_matrix_buffer(buf_rows, width, dtype):
@@ -143,6 +149,51 @@ def strided_copy_2d(total_h, width, stride, block_h, dtype):
     return stridedCopy2D
 
 
+def tilewise_add_via_3d_ub_buffer(M, N, block_M, block_N, dtype):
+    assert M % block_M == 0
+    assert N % block_N == 0
+    tile_m = M // block_M
+    tile_n = N // block_N
+
+    @T.prim_func
+    def tilewiseAddVia3DUBBuffer(
+        A: T.Tensor((M, N), dtype),
+        B: T.Tensor((M, N), dtype),
+        C: T.Tensor((M, N), dtype),
+    ):
+        with T.Kernel(tile_m * tile_n, is_npu=True) as (cid, _):
+            by = cid // tile_n
+            bx = cid % tile_n
+            row = by * block_M
+            col = bx * block_N
+            A_BUF = T.alloc_ub((1, block_M, block_N), dtype)
+            B_BUF = T.alloc_ub((1, block_M, block_N), dtype)
+
+            T.copy(A[row, col], A_BUF)
+            T.copy(B[row, col], B_BUF)
+            T.npuir_add(A_BUF, B_BUF, A_BUF)
+            T.copy(A_BUF, C[row, col])
+
+    return tilewiseAddVia3DUBBuffer
+
+
+def vector_copy_via_trailing_unit_buffer(length, dtype):
+    @T.prim_func
+    def vectorCopyViaTrailingUnitBuffer(
+        A: T.Tensor((length,), dtype),
+        B: T.Tensor((length,), dtype),
+        Debug: T.Tensor((length, 1), dtype),
+    ):
+        with T.Kernel(1, is_npu=True):
+            A_BUF = T.alloc_ub((length, 1), dtype)
+
+            T.copy(A, A_BUF)
+            T.copy(A_BUF, Debug)
+            T.copy(A_BUF, B)
+
+    return vectorCopyViaTrailingUnitBuffer
+
+
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("buf_rows, width, row_idx", VECTOR_2D_BUF_CASES)
 def test_copy_1d_with_2d_buffer_exp(dtype, buf_rows, width, row_idx):
@@ -236,3 +287,36 @@ def test_copy_strided_2d_exp(dtype, H, W, stride, block_h):
 
     expected_out = inp[::stride, :].contiguous()
     assert_close(out.cpu(), expected_out.cpu(), dtype=dtype, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize("M, N, block_M, block_N", NON_CONTIGUOUS_RANK_MISMATCH_CASES)
+def test_copy_non_contiguous_2d_slice_with_3d_buffer_exp(dtype, M, N, block_M, block_N):
+    func = tilewise_add_via_3d_ub_buffer(M, N, block_M, block_N, dtype)
+    compiled = tilelang.compile(func, target="npuir")
+
+    a = gen_tensor((M, N), dtype, kind="randn")
+    b = gen_tensor((M, N), dtype, kind="randn")
+    c = gen_tensor((M, N), dtype, kind="zeros")
+
+    compiled(a, b, c)
+
+    expected = torch.add(a.cpu(), b.cpu())
+    assert_close(c.cpu(), expected, dtype=dtype, rtol=1e-2, atol=1e-2)
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize("length", TRAILING_UNIT_DIM_CASES)
+def test_copy_1d_with_trailing_unit_buffer_exp(dtype, length):
+    func = vector_copy_via_trailing_unit_buffer(length, dtype)
+    compiled = tilelang.compile(func, target="npuir")
+
+    inp = gen_tensor((length,), dtype, kind="randn")
+    out = gen_tensor((length,), dtype, kind="zeros")
+    debug = gen_tensor((length, 1), dtype, kind="zeros")
+
+    compiled(inp, out, debug)
+
+    expected_debug = inp.cpu().unsqueeze(-1)
+    assert_close(debug.cpu(), expected_debug, dtype=dtype, rtol=1e-3, atol=1e-3)
+    assert_close(out.cpu(), inp.cpu(), dtype=dtype, rtol=1e-3, atol=1e-3)
