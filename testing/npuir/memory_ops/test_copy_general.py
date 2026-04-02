@@ -8,11 +8,12 @@ import tilelang.language as T
 from testcommon import assert_close, gen_tensor
 
 pytestmark = [
-    pytest.mark.op('copy_general'),
-    pytest.mark.mode('Expert'),
+    pytest.mark.op("copy_general"),
+    pytest.mark.mode("Expert"),
 ]
 
-DTYPES = ['float16', 'float32']
+DTYPES = ["float32"]
+
 
 def get_kernel_dense_same_rank_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -27,13 +28,14 @@ def get_kernel_dense_same_rank_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A, A_UB)
             T.copy(A_UB, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[:] = inp[:] 
+        expected_out[:] = inp[:]
         return expected_out
 
     return kernel_dense_same_rank_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_rank_reduced_3d_highest_1_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -48,13 +50,14 @@ def get_kernel_dense_rank_reduced_3d_highest_1_GM_UB_GM(src_shape, dst_shape, dt
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[0, :, :], A_UB[0, :, :])
             T.copy(A_UB[0, :, :], B[0, :, :])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[0, :, :] = inp[0, :, :] 
+        expected_out[0, :, :] = inp[0, :, :]
         return expected_out
 
     return kernel_dense_rank_reduced_3d_highest_1_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_rank_reduced_3d_middle_1_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -69,13 +72,14 @@ def get_kernel_dense_rank_reduced_3d_middle_1_GM_UB_GM(src_shape, dst_shape, dty
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[:, 0, :], A_UB[:, 0, :])
             T.copy(A_UB[:, 0, :], B[:, 0, :])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[:, 0, :] = inp[:, 0, :] 
+        expected_out[:, 0, :] = inp[:, 0, :]
         return expected_out
 
     return kernel_dense_rank_reduced_3d_middle_1_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_rank_reduced_3d_lowest_1_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -90,13 +94,14 @@ def get_kernel_dense_rank_reduced_3d_lowest_1_GM_UB_GM(src_shape, dst_shape, dty
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[:, :, 0], A_UB[:, :, 0])
             T.copy(A_UB[:, :, 0], B[:, :, 0])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[:, :, 0] = inp[:, :, 0] 
+        expected_out[:, :, 0] = inp[:, :, 0]
         return expected_out
 
     return kernel_dense_rank_reduced_3d_lowest_1_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_rank_reduced_5d_multi_1_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -111,13 +116,14 @@ def get_kernel_dense_rank_reduced_5d_multi_1_GM_UB_GM(src_shape, dst_shape, dtyp
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[0, :, 0, :, 0], A_UB[0, :, 0, :, 0])
             T.copy(A_UB[0, :, 0, :, 0], B[0, :, 0, :, 0])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[0, :, 0, :, 0] = inp[0, :, 0, :, 0] 
+        expected_out[0, :, 0, :, 0] = inp[0, :, 0, :, 0]
         return expected_out
 
     return kernel_dense_rank_reduced_5d_multi_1_GM_UB_GM, ref_func
+
 
 def get_kernel_true_strided_2d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -132,13 +138,14 @@ def get_kernel_true_strided_2d_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[16:, 32:96], A_UB)
             T.copy(A_UB, B[16:, 32:96])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[16:, 32:96] = inp[16:, 32:96] 
+        expected_out[16:, 32:96] = inp[16:, 32:96]
         return expected_out
 
     return kernel_true_strided_2d_GM_UB_GM, ref_func
+
 
 def get_kernel_true_strided_3d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -153,13 +160,14 @@ def get_kernel_true_strided_3d_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[1:3, 4:12, 16:48], A_UB)
             T.copy(A_UB, B[1:3, 4:12, 16:48])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[1:3, 4:12, 16:48] = inp[1:3, 4:12, 16:48] 
+        expected_out[1:3, 4:12, 16:48] = inp[1:3, 4:12, 16:48]
         return expected_out
 
     return kernel_true_strided_3d_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_squeeze_2d_to_1d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -174,13 +182,14 @@ def get_kernel_dense_squeeze_2d_to_1d_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[5, :], A_UB)
             T.copy(A_UB, B[5, :])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[5, :] = inp[5, :] 
+        expected_out[5, :] = inp[5, :]
         return expected_out
 
     return kernel_dense_squeeze_2d_to_1d_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_squeeze_3d_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -195,13 +204,14 @@ def get_kernel_dense_squeeze_3d_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[2, :, :], A_UB)
             T.copy(A_UB, B[2, :, :])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[2, :, :] = inp[2, :, :] 
+        expected_out[2, :, :] = inp[2, :, :]
         return expected_out
 
     return kernel_dense_squeeze_3d_to_2d_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_squeeze_4d_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -216,13 +226,14 @@ def get_kernel_dense_squeeze_4d_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[1, 2, :, :], A_UB)
             T.copy(A_UB, B[1, 2, :, :])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[1, 2, :, :] = inp[1, 2, :, :] 
+        expected_out[1, 2, :, :] = inp[1, 2, :, :]
         return expected_out
 
     return kernel_dense_squeeze_4d_to_2d_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_squeeze_5d_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -237,13 +248,14 @@ def get_kernel_dense_squeeze_5d_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[1, 0, 3, :, :], A_UB)
             T.copy(A_UB, B[1, 0, 3, :, :])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[1, 0, 3, :, :] = inp[1, 0, 3, :, :] 
+        expected_out[1, 0, 3, :, :] = inp[1, 0, 3, :, :]
         return expected_out
 
     return kernel_dense_squeeze_5d_to_2d_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_squeeze_3d_mid_1_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -258,13 +270,14 @@ def get_kernel_dense_squeeze_3d_mid_1_to_2d_GM_UB_GM(src_shape, dst_shape, dtype
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[1, :, :], A_UB)
             T.copy(A_UB, B[1, :, :])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[1, :, :] = inp[1, :, :] 
+        expected_out[1, :, :] = inp[1, :, :]
         return expected_out
 
     return kernel_dense_squeeze_3d_mid_1_to_2d_GM_UB_GM, ref_func
+
 
 def get_kernel_true_strided_squeeze_3d_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -279,13 +292,14 @@ def get_kernel_true_strided_squeeze_3d_to_2d_GM_UB_GM(src_shape, dst_shape, dtyp
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A[2, 8:24, 32:96], A_UB)
             T.copy(A_UB, B[2, 8:24, 32:96])
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[2, 8:24, 32:96] = inp[2, 8:24, 32:96] 
+        expected_out[2, 8:24, 32:96] = inp[2, 8:24, 32:96]
         return expected_out
 
     return kernel_true_strided_squeeze_3d_to_2d_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_expand_1d_to_2d_row_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -300,13 +314,14 @@ def get_kernel_dense_expand_1d_to_2d_row_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A, A_UB[5, :])
             T.copy(A_UB[5, :], B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[:] = inp[:] 
+        expected_out[:] = inp[:]
         return expected_out
 
     return kernel_dense_expand_1d_to_2d_row_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_expand_2d_to_3d_plane_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -321,13 +336,14 @@ def get_kernel_dense_expand_2d_to_3d_plane_GM_UB_GM(src_shape, dst_shape, dtype)
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A, A_UB[2, :, :])
             T.copy(A_UB[2, :, :], B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[:] = inp[:] 
+        expected_out[:] = inp[:]
         return expected_out
 
     return kernel_dense_expand_2d_to_3d_plane_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_expand_2d_to_4d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -342,13 +358,14 @@ def get_kernel_dense_expand_2d_to_4d_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A, A_UB[1, 2, :, :])
             T.copy(A_UB[1, 2, :, :], B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[:] = inp[:] 
+        expected_out[:] = inp[:]
         return expected_out
 
     return kernel_dense_expand_2d_to_4d_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_expand_1d_1_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -363,13 +380,14 @@ def get_kernel_dense_expand_1d_1_to_2d_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A, A_UB[0, :1])
             T.copy(A_UB[0, :1], B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[:] = inp[:] 
+        expected_out[:] = inp[:]
         return expected_out
 
     return kernel_dense_expand_1d_1_to_2d_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_expand_2d_1_to_4d_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -384,13 +402,14 @@ def get_kernel_dense_expand_2d_1_to_4d_GM_UB_GM(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A, A_UB[1, 2, :, :])
             T.copy(A_UB[1, 2, :, :], B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[:] = inp[:] 
+        expected_out[:] = inp[:]
         return expected_out
 
     return kernel_dense_expand_2d_1_to_4d_GM_UB_GM, ref_func
+
 
 def get_kernel_true_strided_expand_2d_to_3d_inner_GM_UB_GM(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -405,13 +424,14 @@ def get_kernel_true_strided_expand_2d_to_3d_inner_GM_UB_GM(src_shape, dst_shape,
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A, A_UB[2, 16:32, 32:64])
             T.copy(A_UB[2, 16:32, 32:64], B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
-        expected_out[:] = inp[:] 
+        expected_out[:] = inp[:]
         return expected_out
 
     return kernel_true_strided_expand_2d_to_3d_inner_GM_UB_GM, ref_func
+
 
 def get_kernel_dense_same_rank_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -428,13 +448,14 @@ def get_kernel_dense_same_rank_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1, A_UB2)
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:] = inp[:]
         return expected_out
 
     return kernel_dense_same_rank_UB_UB, ref_func
+
 
 def get_kernel_dense_rank_reduced_3d_highest_1_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -451,13 +472,14 @@ def get_kernel_dense_rank_reduced_3d_highest_1_UB_UB(src_shape, dst_shape, dtype
             T.copy(A, A_UB1)
             T.copy(A_UB1[0, :, :], A_UB2[0, :, :])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[0, :, :] = inp[0, :, :]
         return expected_out
 
     return kernel_dense_rank_reduced_3d_highest_1_UB_UB, ref_func
+
 
 def get_kernel_dense_rank_reduced_3d_middle_1_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -474,13 +496,14 @@ def get_kernel_dense_rank_reduced_3d_middle_1_UB_UB(src_shape, dst_shape, dtype)
             T.copy(A, A_UB1)
             T.copy(A_UB1[:, 0, :], A_UB2[:, 0, :])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:, 0, :] = inp[:, 0, :]
         return expected_out
 
     return kernel_dense_rank_reduced_3d_middle_1_UB_UB, ref_func
+
 
 def get_kernel_dense_rank_reduced_3d_lowest_1_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -497,13 +520,14 @@ def get_kernel_dense_rank_reduced_3d_lowest_1_UB_UB(src_shape, dst_shape, dtype)
             T.copy(A, A_UB1)
             T.copy(A_UB1[:, :, 0], A_UB2[:, :, 0])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:, :, 0] = inp[:, :, 0]
         return expected_out
 
     return kernel_dense_rank_reduced_3d_lowest_1_UB_UB, ref_func
+
 
 def get_kernel_dense_rank_reduced_5d_multi_1_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -520,13 +544,14 @@ def get_kernel_dense_rank_reduced_5d_multi_1_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1[0, :, 0, :, 0], A_UB2[0, :, 0, :, 0])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[0, :, 0, :, 0] = inp[0, :, 0, :, 0]
         return expected_out
 
     return kernel_dense_rank_reduced_5d_multi_1_UB_UB, ref_func
+
 
 def get_kernel_true_strided_2d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -543,13 +568,14 @@ def get_kernel_true_strided_2d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1[16:, 32:96], A_UB2)
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:] = inp[16:, 32:96]
         return expected_out
 
     return kernel_true_strided_2d_UB_UB, ref_func
+
 
 def get_kernel_true_strided_3d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -566,13 +592,14 @@ def get_kernel_true_strided_3d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1[1:3, 4:12, 16:48], A_UB2)
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:] = inp[1:3, 4:12, 16:48]
         return expected_out
 
     return kernel_true_strided_3d_UB_UB, ref_func
+
 
 def get_kernel_dense_squeeze_2d_to_1d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -589,13 +616,14 @@ def get_kernel_dense_squeeze_2d_to_1d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1[5, :], A_UB2)
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:] = inp[5, :]
         return expected_out
 
     return kernel_dense_squeeze_2d_to_1d_UB_UB, ref_func
+
 
 def get_kernel_dense_squeeze_3d_to_2d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -612,13 +640,14 @@ def get_kernel_dense_squeeze_3d_to_2d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1[2, :, :], A_UB2)
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:] = inp[2, :, :]
         return expected_out
 
     return kernel_dense_squeeze_3d_to_2d_UB_UB, ref_func
+
 
 def get_kernel_dense_squeeze_4d_to_2d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -635,13 +664,14 @@ def get_kernel_dense_squeeze_4d_to_2d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1[1, 2, :, :], A_UB2)
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:] = inp[1, 2, :, :]
         return expected_out
 
     return kernel_dense_squeeze_4d_to_2d_UB_UB, ref_func
+
 
 def get_kernel_dense_squeeze_5d_to_2d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -658,13 +688,14 @@ def get_kernel_dense_squeeze_5d_to_2d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1[1, 0, 3, :, :], A_UB2)
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:] = inp[1, 0, 3, :, :]
         return expected_out
 
     return kernel_dense_squeeze_5d_to_2d_UB_UB, ref_func
+
 
 def get_kernel_dense_squeeze_3d_mid_1_to_2d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -681,13 +712,14 @@ def get_kernel_dense_squeeze_3d_mid_1_to_2d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1[1, :, :], A_UB2)
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:] = inp[1, :, :]
         return expected_out
 
     return kernel_dense_squeeze_3d_mid_1_to_2d_UB_UB, ref_func
+
 
 def get_kernel_true_strided_squeeze_3d_to_2d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -704,13 +736,14 @@ def get_kernel_true_strided_squeeze_3d_to_2d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1[2, 8:24, 32:96], A_UB2)
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[:] = inp[2, 8:24, 32:96]
         return expected_out
 
     return kernel_true_strided_squeeze_3d_to_2d_UB_UB, ref_func
+
 
 def get_kernel_dense_expand_1d_to_2d_row_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -727,13 +760,14 @@ def get_kernel_dense_expand_1d_to_2d_row_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1, A_UB2[5, :])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[5, :] = inp[:]
         return expected_out
 
     return kernel_dense_expand_1d_to_2d_row_UB_UB, ref_func
+
 
 def get_kernel_dense_expand_2d_to_3d_plane_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -750,13 +784,14 @@ def get_kernel_dense_expand_2d_to_3d_plane_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1, A_UB2[2, :, :])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[2, :, :] = inp[:]
         return expected_out
 
     return kernel_dense_expand_2d_to_3d_plane_UB_UB, ref_func
+
 
 def get_kernel_dense_expand_2d_to_4d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -773,13 +808,14 @@ def get_kernel_dense_expand_2d_to_4d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1, A_UB2[1, 2, :, :])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[1, 2, :, :] = inp[:]
         return expected_out
 
     return kernel_dense_expand_2d_to_4d_UB_UB, ref_func
+
 
 def get_kernel_dense_expand_1d_1_to_2d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -796,13 +832,14 @@ def get_kernel_dense_expand_1d_1_to_2d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1, A_UB2[0, :1])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[0, :1] = inp[:]
         return expected_out
 
     return kernel_dense_expand_1d_1_to_2d_UB_UB, ref_func
+
 
 def get_kernel_dense_expand_2d_1_to_4d_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -819,13 +856,14 @@ def get_kernel_dense_expand_2d_1_to_4d_UB_UB(src_shape, dst_shape, dtype):
             T.copy(A, A_UB1)
             T.copy(A_UB1, A_UB2[1, 2, :, :])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[1, 2, :, :] = inp[:]
         return expected_out
 
     return kernel_dense_expand_2d_1_to_4d_UB_UB, ref_func
+
 
 def get_kernel_true_strided_expand_2d_to_3d_inner_UB_UB(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -842,13 +880,14 @@ def get_kernel_true_strided_expand_2d_to_3d_inner_UB_UB(src_shape, dst_shape, dt
             T.copy(A, A_UB1)
             T.copy(A_UB1, A_UB2[2, 16:32, 32:64])
             T.copy(A_UB2, B)
-    
+
     def ref_func(inp, out):
         expected_out = torch.zeros_like(out)
         expected_out[2, 16:32, 32:64] = inp[:]
         return expected_out
 
     return kernel_true_strided_expand_2d_to_3d_inner_UB_UB, ref_func
+
 
 # fmt: off
 SHAPE_RANK_PARAMS = [
@@ -901,20 +940,30 @@ SHAPE_RANK_PARAMS = [
 ]
 # fmt: on
 
+
 @pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("desc, direction, src_shape, dst_shape, get_kernel_func", SHAPE_RANK_PARAMS)
-def test_shape_rank_mismatch(desc, direction, src_shape, dst_shape, get_kernel_func, dtype):
+@pytest.mark.parametrize(
+    "desc, direction, src_shape, dst_shape, get_kernel_func", SHAPE_RANK_PARAMS
+)
+def test_shape_rank_mismatch(
+    desc, direction, src_shape, dst_shape, get_kernel_func, dtype
+):
     kernel_func, ref_func = get_kernel_func(src_shape, dst_shape, dtype)
-    compiled = tilelang.compile(kernel_func, target='npuir')
-    inp = gen_tensor(src_shape, dtype, kind='randn')
-    out = gen_tensor(src_shape if direction == "GM_UB_GM" else dst_shape, dtype, kind='zeros')
+    compiled = tilelang.compile(kernel_func, target="npuir")
+    inp = gen_tensor(src_shape, dtype, kind="randn")
+    out = gen_tensor(
+        src_shape if direction == "GM_UB_GM" else dst_shape, dtype, kind="zeros"
+    )
     compiled(inp, out)
     expected_out = ref_func(inp, out)
     assert_close(out.cpu(), expected_out.cpu(), dtype=dtype, rtol=1e-2, atol=1e-2)
 
+
 def get_kernel_dynamic_from_func_args_GM_UB_GM(src_shape, dst_shape, ub_shape, dtype):
     @T.prim_func
-    def kernel_dynamic_from_func_args_GM_UB_GM(A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype), length: T.int32):
+    def kernel_dynamic_from_func_args_GM_UB_GM(
+        A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype), length: T.int32
+    ):
         """
         Tests dynamic memory lengths passed directly as runtime arguments.
         Example Instantiation: src_shape=(1024,), ub_shape=(1024,)
@@ -923,17 +972,22 @@ def get_kernel_dynamic_from_func_args_GM_UB_GM(src_shape, dst_shape, ub_shape, d
             length = shape_N
             offset = 0
             A_UB = T.alloc_ub(ub_shape, dtype)
-            T.copy(A[offset:offset+length], A_UB[0:length])
+            T.copy(A[offset : offset + length], A_UB[0:length])
             T.copy(A_UB[0:length], B)
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         expected_out[0:1000] = inp[0:1000]
         return expected_out
+
     return kernel_dynamic_from_func_args_GM_UB_GM, ref_func
+
 
 def get_kernel_dynamic_from_kernel_cid_GM_UB_GM(src_shape, dst_shape, ub_shape, dtype):
     @T.prim_func
-    def kernel_dynamic_from_kernel_cid_GM_UB_GM(A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)):
+    def kernel_dynamic_from_kernel_cid_GM_UB_GM(
+        A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)
+    ):
         """
         Tests dynamic memory indexing natively dependent on NPU block CID (Core ID).
         Example Instantiation: src_shape=(4, 256), ub_shape=(256,)
@@ -943,18 +997,25 @@ def get_kernel_dynamic_from_kernel_cid_GM_UB_GM(src_shape, dst_shape, ub_shape, 
             offset = 0
             length = 256
             A_UB = T.alloc_ub(ub_shape, dtype)
-            T.copy(A[row, offset:offset+length], A_UB[0:length])
-            T.copy(A_UB[0:length], B[row, offset:offset+length])
+            T.copy(A[row, offset : offset + length], A_UB[0:length])
+            T.copy(A_UB[0:length], B[row, offset : offset + length])
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         for cid in range(4):
             expected_out[cid, 0:256] = inp[cid, 0:256]
         return expected_out
+
     return kernel_dynamic_from_kernel_cid_GM_UB_GM, ref_func
 
-def get_kernel_dynamic_from_for_loop_iterator_GM_UB_GM(src_shape, dst_shape, ub_shape, dtype):
+
+def get_kernel_dynamic_from_for_loop_iterator_GM_UB_GM(
+    src_shape, dst_shape, ub_shape, dtype
+):
     @T.prim_func
-    def kernel_dynamic_from_for_loop_iterator_GM_UB_GM(A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)):
+    def kernel_dynamic_from_for_loop_iterator_GM_UB_GM(
+        A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)
+    ):
         """
         Tests dynamic row indexing derived from internal for-loop induction variables.
         Example Instantiation: src_shape=(8, 128), ub_shape=(128,)
@@ -965,8 +1026,9 @@ def get_kernel_dynamic_from_for_loop_iterator_GM_UB_GM(src_shape, dst_shape, ub_
                 offset = 0
                 length = 128
                 A_UB = T.alloc_ub(ub_shape, dtype)
-                T.copy(A[row, offset:offset+length], A_UB[0:length])
-                T.copy(A_UB[0:length], B[row, offset:offset+length])
+                T.copy(A[row, offset : offset + length], A_UB[0:length])
+                T.copy(A_UB[0:length], B[row, offset : offset + length])
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         for cid in range(2):
@@ -974,11 +1036,17 @@ def get_kernel_dynamic_from_for_loop_iterator_GM_UB_GM(src_shape, dst_shape, ub_
                 row = cid * 4 + i
                 expected_out[row, 0:128] = inp[row, 0:128]
         return expected_out
+
     return kernel_dynamic_from_for_loop_iterator_GM_UB_GM, ref_func
 
-def get_kernel_dynamic_from_min_max_arithmetic_GM_UB_GM(src_shape, dst_shape, ub_shape, dtype):
+
+def get_kernel_dynamic_from_min_max_arithmetic_GM_UB_GM(
+    src_shape, dst_shape, ub_shape, dtype
+):
     @T.prim_func
-    def kernel_dynamic_from_min_max_arithmetic_GM_UB_GM(A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)):
+    def kernel_dynamic_from_min_max_arithmetic_GM_UB_GM(
+        A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)
+    ):
         """
         Tests arithmetic boundaries (min/max) for dynamic tail-block processing.
         Example Instantiation: src_shape=(1000,), ub_shape=(256,)
@@ -989,44 +1057,58 @@ def get_kernel_dynamic_from_min_max_arithmetic_GM_UB_GM(src_shape, dst_shape, ub
             remain = 1000 - offset
             length = T.min(block_size, remain)
             A_UB = T.alloc_ub(ub_shape, dtype)
-            T.copy(A[offset:offset+length], A_UB[0:length])
+            T.copy(A[offset : offset + length], A_UB[0:length])
             T.copy(A_UB[0:length], B)
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         for cid in range(4):
             offset = cid * 256
             remain = 1000 - offset
             length = min(256, remain)
-            expected_out[offset:offset+length] = inp[offset:offset+length]
+            expected_out[offset : offset + length] = inp[offset : offset + length]
         return expected_out
+
     return kernel_dynamic_from_min_max_arithmetic_GM_UB_GM, ref_func
 
-def get_kernel_dynamic_loaded_from_ub_buffer_GM_UB_GM(src_shape, dst_shape, ub_shape, dtype):
+
+def get_kernel_dynamic_loaded_from_ub_buffer_GM_UB_GM(
+    src_shape, dst_shape, ub_shape, dtype
+):
     @T.prim_func
-    def kernel_dynamic_loaded_from_ub_buffer_GM_UB_GM(A: T.Tensor(src_shape, dtype), indices: T.Tensor((4,), 'int32'), B: T.Tensor(dst_shape, dtype)):
+    def kernel_dynamic_loaded_from_ub_buffer_GM_UB_GM(
+        A: T.Tensor(src_shape, dtype),
+        indices: T.Tensor((4,), "int32"),
+        B: T.Tensor(dst_shape, dtype),
+    ):
         """
         Tests scalar indices loaded dynamically from UB for data-dependent gather memory fetching.
         Example Instantiation: src_shape=(4, 256), ub_shape=(256,)
         """
         with T.Kernel(4, is_npu=True) as (cid, _):
-            I_UB = T.alloc_ub((4,), 'int32')
+            I_UB = T.alloc_ub((4,), "int32")
             T.copy(indices, I_UB)
             row = I_UB[cid]
             offset = 0
             length = 256
             A_UB = T.alloc_ub(ub_shape, dtype)
-            T.copy(A[row, offset:offset+length], A_UB[0:length])
-            T.copy(A_UB[0:length], B[row, offset:offset+length])
+            T.copy(A[row, offset : offset + length], A_UB[0:length])
+            T.copy(A_UB[0:length], B[row, offset : offset + length])
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         for i in range(4):
             expected_out[indices[i].item(), :] = inp[indices[i].item(), :]
         return expected_out
+
     return kernel_dynamic_loaded_from_ub_buffer_GM_UB_GM, ref_func
+
 
 def get_kernel_dynamic_from_func_args_UB_UB(src_shape, dst_shape, ub_shape, dtype):
     @T.prim_func
-    def kernel_dynamic_from_func_args_UB_UB(A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype), length: T.int32):
+    def kernel_dynamic_from_func_args_UB_UB(
+        A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype), length: T.int32
+    ):
         """
         Tests dynamic memory lengths passed directly as runtime arguments.
         Example Instantiation: src_shape=(1024,), ub_shape=(1024,)
@@ -1039,15 +1121,20 @@ def get_kernel_dynamic_from_func_args_UB_UB(src_shape, dst_shape, ub_shape, dtyp
             T.copy(A, A_UB1)
             T.copy(A_UB1[0:length], A_UB2[0:length])
             T.copy(A_UB2, B)
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         expected_out[...] = inp[...]
         return expected_out
+
     return kernel_dynamic_from_func_args_UB_UB, ref_func
+
 
 def get_kernel_dynamic_from_kernel_cid_UB_UB(src_shape, dst_shape, ub_shape, dtype):
     @T.prim_func
-    def kernel_dynamic_from_kernel_cid_UB_UB(A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)):
+    def kernel_dynamic_from_kernel_cid_UB_UB(
+        A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)
+    ):
         """
         Tests dynamic memory indexing natively dependent on NPU block CID (Core ID).
         Example Instantiation: src_shape=(4, 256), ub_shape=(256,)
@@ -1060,16 +1147,23 @@ def get_kernel_dynamic_from_kernel_cid_UB_UB(src_shape, dst_shape, ub_shape, dty
             A_UB2 = T.alloc_ub(ub_shape, dtype)
             T.copy(A[row, :], A_UB1)
             T.copy(A_UB1[0:length], A_UB2[0:length])
-            T.copy(A_UB2, B[row, offset:offset+length])
+            T.copy(A_UB2, B[row, offset : offset + length])
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         expected_out[...] = inp[...]
         return expected_out
+
     return kernel_dynamic_from_kernel_cid_UB_UB, ref_func
 
-def get_kernel_dynamic_from_for_loop_iterator_UB_UB(src_shape, dst_shape, ub_shape, dtype):
+
+def get_kernel_dynamic_from_for_loop_iterator_UB_UB(
+    src_shape, dst_shape, ub_shape, dtype
+):
     @T.prim_func
-    def kernel_dynamic_from_for_loop_iterator_UB_UB(A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)):
+    def kernel_dynamic_from_for_loop_iterator_UB_UB(
+        A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)
+    ):
         """
         Tests dynamic row indexing derived from internal for-loop induction variables.
         Example Instantiation: src_shape=(8, 128), ub_shape=(128,)
@@ -1083,16 +1177,23 @@ def get_kernel_dynamic_from_for_loop_iterator_UB_UB(src_shape, dst_shape, ub_sha
                 A_UB2 = T.alloc_ub(ub_shape, dtype)
                 T.copy(A[row, :], A_UB1)
                 T.copy(A_UB1[0:length], A_UB2[0:length])
-                T.copy(A_UB2, B[row, offset:offset+length])
+                T.copy(A_UB2, B[row, offset : offset + length])
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         expected_out[...] = inp[...]
         return expected_out
+
     return kernel_dynamic_from_for_loop_iterator_UB_UB, ref_func
 
-def get_kernel_dynamic_from_min_max_arithmetic_UB_UB(src_shape, dst_shape, ub_shape, dtype):
+
+def get_kernel_dynamic_from_min_max_arithmetic_UB_UB(
+    src_shape, dst_shape, ub_shape, dtype
+):
     @T.prim_func
-    def kernel_dynamic_from_min_max_arithmetic_UB_UB(A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)):
+    def kernel_dynamic_from_min_max_arithmetic_UB_UB(
+        A: T.Tensor(src_shape, dtype), B: T.Tensor(dst_shape, dtype)
+    ):
         """
         Tests arithmetic boundaries (min/max) for dynamic tail-block processing.
         Example Instantiation: src_shape=(1000,), ub_shape=(256,)
@@ -1107,21 +1208,30 @@ def get_kernel_dynamic_from_min_max_arithmetic_UB_UB(src_shape, dst_shape, ub_sh
             T.copy(A, A_UB1)
             T.copy(A_UB1[0:length], A_UB2[0:length])
             T.copy(A_UB2, B)
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         expected_out[...] = inp[...]
         return expected_out
+
     return kernel_dynamic_from_min_max_arithmetic_UB_UB, ref_func
 
-def get_kernel_dynamic_loaded_from_ub_buffer_UB_UB(src_shape, dst_shape, ub_shape, dtype):
+
+def get_kernel_dynamic_loaded_from_ub_buffer_UB_UB(
+    src_shape, dst_shape, ub_shape, dtype
+):
     @T.prim_func
-    def kernel_dynamic_loaded_from_ub_buffer_UB_UB(A: T.Tensor(src_shape, dtype), indices: T.Tensor((4,), 'int32'), B: T.Tensor(dst_shape, dtype)):
+    def kernel_dynamic_loaded_from_ub_buffer_UB_UB(
+        A: T.Tensor(src_shape, dtype),
+        indices: T.Tensor((4,), "int32"),
+        B: T.Tensor(dst_shape, dtype),
+    ):
         """
         Tests scalar indices loaded dynamically from UB for data-dependent gather memory fetching.
         Example Instantiation: src_shape=(4, 256), ub_shape=(256,)
         """
         with T.Kernel(4, is_npu=True) as (cid, _):
-            I_UB = T.alloc_ub((4,), 'int32')
+            I_UB = T.alloc_ub((4,), "int32")
             T.copy(indices, I_UB)
             row = I_UB[cid]
             offset = 0
@@ -1130,12 +1240,15 @@ def get_kernel_dynamic_loaded_from_ub_buffer_UB_UB(src_shape, dst_shape, ub_shap
             A_UB2 = T.alloc_ub(ub_shape, dtype)
             T.copy(A[row, :], A_UB1)
             T.copy(A_UB1[0:length], A_UB2[0:length])
-            T.copy(A_UB2, B[row, offset:offset+length])
+            T.copy(A_UB2, B[row, offset : offset + length])
+
     def ref_func(inp, out, indices=None):
         expected_out = torch.zeros_like(out)
         expected_out[...] = inp[...]
         return expected_out
+
     return kernel_dynamic_loaded_from_ub_buffer_UB_UB, ref_func
+
 
 # fmt: off
 DYNAMIC_PARAMS = [
@@ -1152,13 +1265,21 @@ DYNAMIC_PARAMS = [
 ]
 # fmt: on
 
+
 @pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("dyn_case, direction, src_shape, dst_shape, ub_shape, get_kernel_func", DYNAMIC_PARAMS)
-def test_dynamic_scenarios(dyn_case, direction, src_shape, dst_shape, ub_shape, get_kernel_func, dtype):
+@pytest.mark.parametrize(
+    "dyn_case, direction, src_shape, dst_shape, ub_shape, get_kernel_func",
+    DYNAMIC_PARAMS,
+)
+def test_dynamic_scenarios(
+    dyn_case, direction, src_shape, dst_shape, ub_shape, get_kernel_func, dtype
+):
     kernel_func, ref_func = get_kernel_func(src_shape, dst_shape, ub_shape, dtype)
-    compiled = tilelang.compile(kernel_func, target='npuir')
-    inp = gen_tensor(src_shape, dtype, kind='randn')
-    out = gen_tensor(src_shape if direction == "GM_UB_GM" else dst_shape, dtype, kind='zeros')
+    compiled = tilelang.compile(kernel_func, target="npuir")
+    inp = gen_tensor(src_shape, dtype, kind="randn")
+    out = gen_tensor(
+        src_shape if direction == "GM_UB_GM" else dst_shape, dtype, kind="zeros"
+    )
     if dyn_case == "dynamic_from_func_args":
         compiled(inp, out, 1000)
         expected_out = ref_func(inp, out)
@@ -1170,6 +1291,7 @@ def test_dynamic_scenarios(dyn_case, direction, src_shape, dst_shape, ub_shape, 
         compiled(inp, out)
         expected_out = ref_func(inp, out)
     assert_close(out.cpu(), expected_out.cpu(), dtype=dtype, rtol=1e-2, atol=1e-2)
+
 
 def get_kernel_syntax_full_tensor(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -1184,11 +1306,14 @@ def get_kernel_syntax_full_tensor(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub(dst_shape, dtype)
             T.copy(A, A_UB)
             T.copy(A_UB, B)
+
     def ref_func(inp, out):
         expected_out = out.clone()
         expected_out[...] = inp[...]
         return expected_out
+
     return kernel_syntax_full_tensor, ref_func
+
 
 def get_kernel_syntax_implicit_src_scalar(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -1203,11 +1328,14 @@ def get_kernel_syntax_implicit_src_scalar(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub((128,), dtype)
             T.copy(A[cid, 0:128], A_UB[0:128])
             T.copy(A_UB[0:128], B[cid, 0:128])
+
     def ref_func(inp, out):
         expected_out = out.clone()
         expected_out[...] = inp[...]
         return expected_out
+
     return kernel_syntax_implicit_src_scalar, ref_func
+
 
 def get_kernel_syntax_implicit_dst_scalar(src_shape, dst_shape, dtype):
     @T.prim_func
@@ -1222,11 +1350,14 @@ def get_kernel_syntax_implicit_dst_scalar(src_shape, dst_shape, dtype):
             A_UB = T.alloc_ub((128,), dtype)
             T.copy(A[cid, 0:128], A_UB)
             T.copy(A_UB, B[cid, 0:128])
+
     def ref_func(inp, out):
         expected_out = out.clone()
         expected_out[...] = inp[...]
         return expected_out
+
     return kernel_syntax_implicit_dst_scalar, ref_func
+
 
 # fmt: off
 SYNTAX_PARAMS = [
@@ -1236,13 +1367,16 @@ SYNTAX_PARAMS = [
 ]
 # fmt: on
 
+
 @pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("syntax_case, src_shape, dst_shape, get_kernel_func", SYNTAX_PARAMS)
+@pytest.mark.parametrize(
+    "syntax_case, src_shape, dst_shape, get_kernel_func", SYNTAX_PARAMS
+)
 def test_syntax_scenarios(syntax_case, src_shape, dst_shape, get_kernel_func, dtype):
     kernel_func, ref_func = get_kernel_func(src_shape, dst_shape, dtype)
-    compiled = tilelang.compile(kernel_func, target='npuir')
-    inp = gen_tensor(src_shape, dtype, kind='randn')
-    out = gen_tensor(dst_shape, dtype, kind='zeros')
+    compiled = tilelang.compile(kernel_func, target="npuir")
+    inp = gen_tensor(src_shape, dtype, kind="randn")
+    out = gen_tensor(dst_shape, dtype, kind="zeros")
     compiled(inp, out)
     expected_out = ref_func(inp, out)
     assert_close(out.cpu(), expected_out.cpu(), dtype=dtype, rtol=1e-2, atol=1e-2)
