@@ -297,187 +297,6 @@ CodeGenTileLangNPUIRAPI
 ******************************************************************************************
 ******************************************************************************************/
 
-void CodeGenTileLangNPUIRAPI::SmartMemRefCopy(mlir::Value src,
-                                              mlir::Value dst) {
-  auto src_type = src.getType().cast<mlir::MemRefType>();
-  auto dst_type = dst.getType().cast<mlir::MemRefType>();
-  auto loc = builder.getUnknownLoc();
-
-  // Copy if shape match
-  if (src_type.getShape() == dst_type.getShape()) {
-    builder.create<mlir::memref::CopyOp>(loc, TypeRange{}, src, dst);
-    return;
-  }
-
-  // 2. Try Reinterpret Copy if shape not match but numElements match
-  if (src_type.getNumElements() == dst_type.getNumElements()) {
-
-    // safety check: stride hack only when elementTypes match
-    if (src_type.getElementType() != dst_type.getElementType()) {
-      ICHECK(false) << "HandleMemRefReshapeCopy requires same element type.";
-      return;
-    }
-
-    // Get offset of src MemRef
-    auto extractOp =
-        builder.create<mlir::memref::ExtractStridedMetadataOp>(loc, src);
-    mlir::Value offsetValue = extractOp.getOffset();
-
-    llvm::SmallVector<mlir::OpFoldResult> offsets;
-    offsets.push_back(offsetValue);
-
-    // 1. get sizes for dst value.
-    llvm::SmallVector<mlir::OpFoldResult> sizes;
-    llvm::SmallVector<mlir::Value> dim_values;
-
-    for (int i = 0; i < dst_type.getRank(); ++i) {
-      int64_t static_dim = dst_type.getDimSize(i);
-
-      if (mlir::ShapedType::isDynamic(static_dim)) {
-        mlir::Value dim_val = builder.create<mlir::memref::DimOp>(loc, dst, i);
-        sizes.push_back(dim_val);
-        dim_values.push_back(dim_val);
-      } else {
-        sizes.push_back(builder.getIndexAttr(static_dim));
-        dim_values.push_back(
-            builder.create<mlir::arith::ConstantIndexOp>(loc, static_dim));
-      }
-    }
-
-    // 2. Compute strides for StridedLayoutAttr
-    // Rule: Calculate from the last dimension to the first. When encountering a
-    // dynamic dimension, the current and all preceding strides become dynamic.
-    llvm::SmallVector<int64_t> layout_strides(dst_type.getRank(),
-                                              mlir::ShapedType::kDynamic);
-    int64_t current_stride = 1;
-    bool all_static_so_far = true;
-
-    // Calculate from the lowest dimension (last dimension) to the highest
-    for (int i = dst_type.getRank() - 1; i >= 0; --i) {
-      int64_t dim_size = dst_type.getDimSize(i);
-
-      // Set stride for the current dimension
-      if (i == dst_type.getRank() - 1) {
-        // The lowest dimension's stride is always 1
-        layout_strides[i] = 1;
-      } else {
-        // Normal case
-        layout_strides[i] = current_stride;
-      }
-
-      // Update current_stride for the next dimension (higher dimension)
-      if (mlir::ShapedType::isDynamic(dim_size)) {
-        all_static_so_far = false;
-        break;
-      } else {
-        current_stride *= dim_size;
-      }
-    }
-
-    // 3. Prepare dynamic strides parameters for reinterpret_cast
-    llvm::SmallVector<mlir::OpFoldResult> strides;
-
-    if (all_static_so_far) {
-      // All static: use static stride values
-      for (int64_t stride : layout_strides) {
-        strides.push_back(builder.getIndexAttr(stride));
-      }
-    } else {
-      // Has dynamic dimensions: need to compute dynamic strides
-      // Create a vector to store computed strides (calculated from back to
-      // front)
-      llvm::SmallVector<mlir::Value> temp_strides(dst_type.getRank());
-
-      // Calculate from back to front
-      mlir::Value current_dyn_stride =
-          builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
-      for (int i = dst_type.getRank() - 1; i >= 0; --i) {
-        // Store stride for current dimension
-        temp_strides[i] = current_dyn_stride;
-
-        if (i > 0) {
-          // Update current_dyn_stride for the next dimension (higher dimension)
-          // current_dimension_stride * current_dimension_size
-          current_dyn_stride = builder.create<mlir::arith::MulIOp>(
-              loc, current_dyn_stride, dim_values[i]);
-        }
-      }
-
-      // Convert temp_strides to OpFoldResult and add to strides in order
-      for (int i = 0; i < dst_type.getRank(); ++i) {
-        strides.push_back(temp_strides[i]);
-      }
-    }
-
-    // 4. Create StridedLayoutAttr
-    auto layout = mlir::StridedLayoutAttr::get(
-        &context, mlir::ShapedType::kDynamic, layout_strides);
-
-    // 5. Create target type
-    mlir::MemRefType new_dst_type =
-        mlir::MemRefType::get(dst_type.getShape(), dst_type.getElementType(),
-                              layout, src_type.getMemorySpace());
-
-    // 6. Create reinterpret_cast
-    mlir::Value reinterpreted_src =
-        builder.create<mlir::memref::ReinterpretCastOp>(
-            loc, new_dst_type, src, offsets, sizes, strides);
-
-    // 7. Copy
-    builder.create<mlir::memref::CopyOp>(loc, TypeRange{}, reinterpreted_src,
-                                         dst);
-
-    return;
-  }
-
-  // 3. Copy with shape mismatch: use the smaller extent to avoid overflow.
-  //    - src dynamic (remain_M, remain_N), dst static (32, 32): subview dst to
-  //      src's sizes, copy src -> dst_sub.
-  //    - src static (32, 32), dst dynamic (remain_M, remain_N): subview src to
-  //      dst's sizes, copy src_sub -> dst.
-  if (src_type.getRank() == dst_type.getRank() &&
-      src_type.getElementType() == dst_type.getElementType()) {
-    llvm::SmallVector<mlir::OpFoldResult> zeros(dst_type.getRank(),
-                                                builder.getIndexAttr(0));
-    llvm::SmallVector<mlir::OpFoldResult> strides(dst_type.getRank(),
-                                                  builder.getIndexAttr(1));
-    llvm::SmallVector<mlir::OpFoldResult> sizes;
-    bool use_src_sizes =
-        false; // true => subview dst to copy src in; else subview src
-    for (int i = 0; i < src_type.getRank(); ++i) {
-      bool src_dyn = mlir::ShapedType::isDynamic(src_type.getDimSize(i));
-      bool dst_dyn = mlir::ShapedType::isDynamic(dst_type.getDimSize(i));
-      if (src_dyn && !dst_dyn) {
-        use_src_sizes = true;
-        sizes.push_back(
-            builder.create<mlir::memref::DimOp>(loc, src, i).getResult());
-      } else if (!src_dyn && dst_dyn) {
-        sizes.push_back(
-            builder.create<mlir::memref::DimOp>(loc, dst, i).getResult());
-      } else if (src_dyn && dst_dyn) {
-        use_src_sizes = true;
-        sizes.push_back(
-            builder.create<mlir::memref::DimOp>(loc, src, i).getResult());
-      } else {
-        // Both static: use dst sizes so we subview src and never overflow dst
-        sizes.push_back(builder.getIndexAttr(dst_type.getDimSize(i)));
-      }
-    }
-    if (use_src_sizes) {
-      mlir::Value dst_sub = builder.create<mlir::memref::SubViewOp>(
-          loc, dst, zeros, sizes, strides);
-      builder.create<mlir::memref::CopyOp>(loc, TypeRange{}, src, dst_sub);
-    } else {
-      mlir::Value src_sub = builder.create<mlir::memref::SubViewOp>(
-          loc, src, zeros, sizes, strides);
-      builder.create<mlir::memref::CopyOp>(loc, TypeRange{}, src_sub, dst);
-    }
-    return;
-  }
-  ICHECK(false)
-      << "SmartMemRefCopy: Shape mismatch and cannot interpret cast. ";
-}
-
 mlir::Value CodeGenTileLangNPUIRAPI::ScalarConvertType(const PrimExpr &imm,
                                                        DataType targetDtype) {
   auto castNode = std::make_unique<tir::Cast>(targetDtype, imm);
@@ -930,6 +749,106 @@ CodeGenTileLangNPUIRAPI::GenSubviewFromRegion(const CallNode *region_node) {
   return GenSubviewFromRegion(regionop.GetBuffer(), regionop.GetRanges());
 }
 
+// Extract static shape from TVM Range extents for shape comparison.
+// Returns -1 (ShapedType::kDynamic) for dynamic dimensions.
+static std::vector<int64_t> GetRangeStaticShape(const Array<Range> &range) {
+  std::vector<int64_t> shape;
+  shape.reserve(range.size());
+  for (const Range &r : range) {
+    if (auto s_int = as_const_int(r->extent)) {
+      shape.push_back(*s_int);
+    } else {
+      shape.push_back(-1); // Dynamic
+    }
+  }
+  return shape;
+}
+
+// Backbone-Gap Shape Alignment Algorithm.
+//
+// Given two shapes that are semantically equivalent (same non-1 "backbone"
+// dimensions in the same order, differing only in the number of singleton
+// dimensions scattered between them), compute the optimal aligned target shape
+// that preserves the maximum shared structure.
+//
+// Algorithm:
+//   1. Extract the "backbone" (all non-1 dims) and count "gaps" (number of 1s
+//      between consecutive backbone elements, including before the first and
+//      after the last).
+//   2. Verify backbones are identical (fatal error otherwise).
+//   3. Take the element-wise minimum of gap counts.
+//   4. Reconstruct the target shape by interleaving minimized gaps with the
+//      backbone.
+//
+// Examples:
+//   (16,1,16,1) vs (16,16,1)  ->  target = (16,16,1)
+//   (1,1,1,1,16) vs (1,16)    ->  target = (1,16)
+//   (16,1) vs (16,1)          ->  target = (16,1)  [no reduction needed]
+static std::vector<int64_t>
+FindAlignedTargetShape(const std::vector<int64_t> &shape_a,
+                       const std::vector<int64_t> &shape_b) {
+  // Extract backbone (non-1 dims) and gaps (count of 1s in each slot).
+  // There are (backbone.size() + 1) gap slots.
+  auto extract = [](const std::vector<int64_t> &shape)
+      -> std::pair<std::vector<int64_t>, std::vector<int>> {
+    std::vector<int64_t> backbone;
+    std::vector<int> gaps;
+    gaps.push_back(0); // Gap before first backbone element
+    for (int64_t dim : shape) {
+      if (dim == 1) {
+        gaps.back() += 1;
+      } else {
+        backbone.push_back(dim);
+        gaps.push_back(0); // New gap after this backbone element
+      }
+    }
+    return {backbone, gaps};
+  };
+
+  auto [bb_a, gaps_a] = extract(shape_a);
+  auto [bb_b, gaps_b] = extract(shape_b);
+
+  // Verify backbones match. Dynamic dims (-1) are treated as wildcards.
+  ICHECK(bb_a.size() == bb_b.size())
+      << "SmartMemRefCopy: backbone rank mismatch. "
+      << "src has " << bb_a.size() << " non-singleton dims, "
+      << "dst has " << bb_b.size() << " non-singleton dims.";
+  for (size_t i = 0; i < bb_a.size(); ++i) {
+    bool a_dyn = (bb_a[i] == -1);
+    bool b_dyn = (bb_b[i] == -1);
+    ICHECK(a_dyn || b_dyn || bb_a[i] == bb_b[i])
+        << "SmartMemRefCopy: backbone dimension mismatch at position " << i
+        << ": src=" << bb_a[i] << " vs dst=" << bb_b[i];
+  }
+
+  // Take element-wise minimum of gaps
+  std::vector<int> target_gaps(gaps_a.size());
+  for (size_t i = 0; i < gaps_a.size(); ++i) {
+    target_gaps[i] = std::min(gaps_a[i], gaps_b[i]);
+  }
+
+  // Reconstruct: interleave gaps[i] ones, then backbone[i]
+  std::vector<int64_t> target;
+  for (size_t i = 0; i < bb_a.size(); ++i) {
+    for (int j = 0; j < target_gaps[i]; ++j) {
+      target.push_back(1);
+    }
+    // Use whichever side is static; prefer non-dynamic
+    target.push_back(bb_a[i] != -1 ? bb_a[i] : bb_b[i]);
+  }
+  // Trailing gap
+  for (int j = 0; j < target_gaps.back(); ++j) {
+    target.push_back(1);
+  }
+
+  // Edge case: if backbone is empty (all dims are 1), keep at least one dim
+  if (target.empty()) {
+    target.push_back(1);
+  }
+
+  return target;
+}
+
 // Helper to check if an OpFoldResult is a static integer equal to `value`.
 static bool IsStaticIntOFR(mlir::OpFoldResult ofr, int64_t value) {
   if (auto attr = ofr.dyn_cast<mlir::Attribute>()) {
@@ -1033,6 +952,60 @@ mlir::Value CodeGenTileLangNPUIRAPI::GenRankReducedSubviewFromRegion(
   }
 
   // Infer the rank-reduced memref type and create the SubViewOp.
+  auto reducedTy = mlir::memref::SubViewOp::inferRankReducedResultType(
+                       projectedReducedShape, baseTy, offsets, sizes, strides)
+                       .cast<mlir::MemRefType>();
+
+  return builder.create<mlir::memref::SubViewOp>(
+      builder.getUnknownLoc(), reducedTy, v_value, offsets, sizes, strides);
+}
+
+// Generate a memref.subview from a Buffer+Region, projecting to a
+// caller-specified target shape. This avoids nested subviews by computing
+// the rank-reduced type in a single SubViewOp emission.
+mlir::Value CodeGenTileLangNPUIRAPI::GenSubviewWithTargetShape(
+    Buffer buffer_data, Array<Range> range,
+    llvm::ArrayRef<int64_t> targetShape) {
+  Array<PrimExpr> region_shape, region_indices;
+  for (Range r : range) {
+    region_shape.push_back(r.get()->extent);
+    region_indices.push_back(r.get()->min);
+  }
+  const VarNode *v = buffer_data->data.get();
+  mlir::Value v_value = GetVarValue(v);
+
+  // Fast path: if target shape matches base rank and region is full, skip.
+  const bool is_full_region =
+      IsEqual(buffer_data->shape, region_shape) && AllZero(region_indices);
+  auto baseTy = v_value.getType().cast<mlir::MemRefType>();
+  if (is_full_region &&
+      static_cast<int64_t>(targetShape.size()) == baseTy.getRank()) {
+    return v_value;
+  }
+
+  // Build offsets, sizes, strides from range
+  SmallVector<OpFoldResult> offsets;
+  SmallVector<OpFoldResult> sizes;
+  SmallVector<OpFoldResult> strides;
+  for (Range r : range) {
+    if (auto s_int = as_const_int(r.get()->min)) {
+      offsets.push_back(builder.getI64IntegerAttr(*s_int));
+    } else {
+      mlir::Value indexVal = CreateIndexCastOp(MakeValue(r.get()->min));
+      offsets.push_back(indexVal);
+    }
+    if (auto s_int = as_const_int(r.get()->extent)) {
+      sizes.push_back(builder.getI64IntegerAttr(*s_int));
+    } else {
+      mlir::Value s_index = CreateIndexCastOp(MakeValue(r.get()->extent));
+      sizes.push_back(s_index);
+    }
+    strides.push_back(builder.getI64IntegerAttr(1));
+  }
+
+  // Convert targetShape to projected reduced shape for MLIR
+  llvm::SmallVector<int64_t> projectedReducedShape(targetShape.begin(),
+                                                   targetShape.end());
   auto reducedTy = mlir::memref::SubViewOp::inferRankReducedResultType(
                        projectedReducedShape, baseTy, offsets, sizes, strides)
                        .cast<mlir::MemRefType>();
@@ -1238,11 +1211,41 @@ void CodeGenTileLangNPUIRAPI::AscendCopyCodegen(const CallNode *op) {
     return;
   }
 
-  mlir::Value src_sub_view =
-      GenRankReducedSubviewFromRegion(npuirop.src, npuirop.src_range);
-  mlir::Value dst_sub_view =
-      GenRankReducedSubviewFromRegion(npuirop.dst, npuirop.dst_range);
-  SmartMemRefCopy(src_sub_view, dst_sub_view);
+  // Early dtype check: T.copy does not support element type casting.
+  ICHECK(npuirop.src->dtype == npuirop.dst->dtype)
+      << "T.copy does not support element type casting. ";
+
+  // Bilateral shape alignment for T.copy:
+  // If src and dst ranges have identical static shapes, use plain subview.
+  // Otherwise, use the Backbone-Gap algorithm to find the optimal aligned
+  // target shape that preserves maximum structure while ensuring both sides
+  // have identical rank and shape for the copy.
+  auto src_shape = GetRangeStaticShape(npuirop.src_range);
+  auto dst_shape = GetRangeStaticShape(npuirop.dst_range);
+
+  mlir::Value src_sub_view, dst_sub_view;
+  if (src_shape == dst_shape) {
+    // Exact structural match (e.g. 16x1 to 16x1): plain subview, no reduction
+    src_sub_view = GenSubviewFromRegion(npuirop.src, npuirop.src_range);
+    dst_sub_view = GenSubviewFromRegion(npuirop.dst, npuirop.dst_range);
+  } else {
+    // Structural mismatch: compute aligned target via Backbone-Gap
+    auto target = FindAlignedTargetShape(src_shape, dst_shape);
+    src_sub_view =
+        GenSubviewWithTargetShape(npuirop.src, npuirop.src_range, target);
+    dst_sub_view =
+        GenSubviewWithTargetShape(npuirop.dst, npuirop.dst_range, target);
+  }
+  // After bilateral shape alignment, both subviews must have identical shapes.
+  // Emit a direct memref.copy.
+  auto src_ty = src_sub_view.getType().cast<mlir::MemRefType>();
+  auto dst_ty = dst_sub_view.getType().cast<mlir::MemRefType>();
+  ICHECK(src_ty.getShape() == dst_ty.getShape())
+      << "T.copy: shape mismatch after Backbone-Gap alignment. "
+      << "This indicates a frontend bug where src and dst ranges "
+      << "do not share the same dynamic bounds.";
+  builder.create<mlir::memref::CopyOp>(builder.getUnknownLoc(), TypeRange{},
+                                       src_sub_view, dst_sub_view);
 }
 
 template <typename T, typename U>

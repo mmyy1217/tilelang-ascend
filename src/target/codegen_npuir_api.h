@@ -269,12 +269,15 @@ private:
   mlir::Value GenRankReducedSubviewFromRegion(Buffer buffer_data,
                                               Array<Range> range,
                                               int min_rank = 0);
+  // Generate a memref.subview projected to a caller-specified target shape,
+  // used by the Backbone-Gap bilateral alignment algorithm for T.copy.
+  mlir::Value GenSubviewWithTargetShape(Buffer buffer_data, Array<Range> range,
+                                        llvm::ArrayRef<int64_t> targetShape);
   mlir::Value CreateIndexCastOp(mlir::Value src);
   std::pair<bool, mlir::Value> CheckMLIRValueMap(mlir::Value val);
   std::pair<bool, mlir::Value> CheckPrimExprMap(const PrimExprNode * op);
   void UpdatePrimExprMap(const PrimExprNode * key, mlir::Value val);
   void UpdateMLIRValueMap(const mlir::Value key,  mlir::Value val);
-  void SmartMemRefCopy(mlir::Value src, mlir::Value dst);
 
   // Whether global barrier is needed.
   bool need_global_barrier_{false};
