@@ -266,26 +266,26 @@ private:
 
   struct SliceFacts {
     Buffer buffer;
-    mlir::Value base;
-    mlir::MemRefType baseTy;
-    llvm::SmallVector<mlir::OpFoldResult> offsets;
-    llvm::SmallVector<mlir::OpFoldResult> sizes;
-    llvm::SmallVector<mlir::OpFoldResult> baseStrideOfrs;
-    bool isFullRegion{false};
-    llvm::SmallVector<int64_t> baseStrides;
-    int64_t baseOffset{0};
+    mlir::Value baseMemref;
+    mlir::MemRefType baseMemrefType;
+    llvm::SmallVector<mlir::OpFoldResult> sliceOffsets;
+    llvm::SmallVector<mlir::OpFoldResult> sliceSizes;
+    llvm::SmallVector<mlir::OpFoldResult> baseLayoutStrideValues;
+    bool coversWholeBuffer{false};
+    llvm::SmallVector<int64_t> baseLayoutStrides;
+    int64_t baseLayoutOffset{0};
   };
 
   struct CopyShapePlan {
-    llvm::SmallVector<int64_t> targetShape;
-    llvm::SmallVector<unsigned> srcKeptIdx;
-    llvm::SmallVector<unsigned> dstKeptIdx;
+    llvm::SmallVector<int64_t> alignedShape;
+    llvm::SmallVector<unsigned> srcKeptDims;
+    llvm::SmallVector<unsigned> dstKeptDims;
   };
 
   struct ProjectedLayoutPlan {
-    llvm::SmallVector<int64_t> projectedStrides;
-    llvm::SmallVector<mlir::OpFoldResult> projectedSizes;
-    mlir::OpFoldResult projectedOffset;
+    llvm::SmallVector<int64_t> viewStrides;
+    llvm::SmallVector<mlir::OpFoldResult> viewSizes;
+    mlir::OpFoldResult viewOffset;
   };
 
   mlir::Value GenMemrefLoadFromRegion(const BufferLoadNode *op);
@@ -296,16 +296,18 @@ private:
   mlir::Value GenRankReducedSubviewFromRegion(Buffer buffer_data,
                                               Array<Range> range,
                                               int min_rank = 0);
-  SliceFacts CollectSliceFacts(Buffer buffer_data, Array<Range> range);
-  CopyShapePlan PlanCopyShape(const SliceFacts &src, const SliceFacts &dst);
-  ProjectedLayoutPlan PlanProjectedLayout(const SliceFacts &facts,
-                                          llvm::ArrayRef<unsigned> keptIdx,
-                                          llvm::ArrayRef<int64_t> targetShape);
-  mlir::Value BuildFullSubview(const SliceFacts &facts);
-  mlir::Value BuildProjectedCopyView(mlir::Value fullSubview, mlir::Type elemTy,
-                                     mlir::Attribute memSpace,
-                                     llvm::ArrayRef<int64_t> targetShape,
-                                     const ProjectedLayoutPlan &layout);
+  SliceFacts BuildSliceFacts(Buffer buffer_data, Array<Range> range);
+  CopyShapePlan BuildCopyShapePlan(const SliceFacts &src,
+                                   const SliceFacts &dst);
+  ProjectedLayoutPlan
+  BuildProjectedLayoutPlan(const SliceFacts &facts,
+                           llvm::ArrayRef<unsigned> keptDims,
+                           llvm::ArrayRef<int64_t> alignedShape);
+  mlir::Value BuildFullRankSubview(const SliceFacts &facts);
+  mlir::Value BuildAlignedCopyView(mlir::Value fullSubview, mlir::Type elemTy,
+                                   mlir::Attribute memSpace,
+                                   llvm::ArrayRef<int64_t> alignedShape,
+                                   const ProjectedLayoutPlan &layout);
   mlir::Value CreateIndexCastOp(mlir::Value src);
   std::pair<bool, mlir::Value> CheckMLIRValueMap(mlir::Value val);
   std::pair<bool, mlir::Value> CheckPrimExprMap(const PrimExprNode *op);
