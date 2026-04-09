@@ -409,6 +409,11 @@ BuildIndexFoldResultsFromExprs(mlir::OpBuilder &builder,
 
 static llvm::SmallVector<int64_t>
 InferCanonicalStrides(llvm::ArrayRef<int64_t> shape) {
+  // Compute the canonical row-major strides for an aligned logical shape.
+  // This is not the source of truth for projected copy layout: generic T.copy
+  // still projects real strides from the base layout. We only use these
+  // canonical strides to replace dynamic strides on singleton dimensions,
+  // where the stride is not observable in the accessed element set.
   llvm::SmallVector<int64_t> strides(shape.size(), mlir::ShapedType::kDynamic);
   int64_t running = 1;
   bool suffixStatic = true;
