@@ -265,7 +265,6 @@ private:
   friend void PrintConst(const FloatImmNode *op, CodeGenTileLangNPUIRAPI *p);
 
   struct SliceFacts {
-    Buffer buffer;
     mlir::Value baseMemref;
     mlir::MemRefType baseMemrefType;
     llvm::SmallVector<mlir::OpFoldResult> sliceOffsets;

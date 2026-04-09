@@ -1100,28 +1100,32 @@ CodeGenTileLangNPUIRAPI::SliceFacts
 CodeGenTileLangNPUIRAPI::BuildSliceFacts(Buffer buffer_data,
                                          Array<Range> range) {
   SliceFacts facts;
-  facts.buffer = buffer_data;
   facts.baseMemref = GetVarValue(buffer_data->data.get());
   facts.baseMemrefType = facts.baseMemref.getType().dyn_cast<mlir::MemRefType>();
+  // Generic T.copy only reasons about memref views in the default path.
   ICHECK(facts.baseMemrefType)
       << "generic T.copy only supports memref operands in the default path.";
 
   auto layoutAttr =
       facts.baseMemrefType.getLayout().dyn_cast<mlir::StridedLayoutAttr>();
+  // The projected-layout path expects offset/stride metadata in strided form.
   ICHECK(layoutAttr)
       << "generic T.copy only supports strided memref operands in the default "
          "path.";
+  // Slice offsets may be dynamic, but the base memref layout itself must have a
+  // fixed starting point so the projected view offset stays well-defined.
   ICHECK(!mlir::ShapedType::isDynamic(layoutAttr.getOffset()))
       << "generic T.copy requires a statically-known base layout offset.";
+  // Keep the generic path intentionally narrow: contiguous buffers only.
+  ICHECK(buffer_data->strides.empty())
+      << "generic T.copy only supports contiguous buffers; explicit buffer "
+         "strides are unsupported.";
 
   facts.baseLayoutOffset = layoutAttr.getOffset();
   llvm::SmallVector<PrimExpr> shapeExprs(buffer_data->shape.begin(),
                                          buffer_data->shape.end());
   llvm::SmallVector<PrimExpr> strideExprs =
-      buffer_data->strides.empty()
-          ? BuildContiguousStrideExprs(shapeExprs)
-          : llvm::SmallVector<PrimExpr>(buffer_data->strides.begin(),
-                                        buffer_data->strides.end());
+      BuildContiguousStrideExprs(shapeExprs);
   facts.baseLayoutStrides = ExtractStaticInts(strideExprs);
   facts.baseLayoutStrideValues = BuildIndexFoldResultsFromExprs(
       builder, strideExprs, [this](PrimExpr expr) {
@@ -1145,9 +1149,12 @@ CodeGenTileLangNPUIRAPI::BuildSliceFacts(Buffer buffer_data,
     }
   }
 
+  // Region rank and base memref rank must match because the default path always
+  // builds a full-rank subview before reinterpreting the aligned copy view.
   ICHECK(static_cast<int64_t>(facts.sliceOffsets.size()) ==
          facts.baseMemrefType.getRank())
       << "generic T.copy expects range rank to match base memref rank.";
+  // The contiguous stride model must produce one stride per original slice dim.
   ICHECK(facts.baseLayoutStrides.size() == facts.sliceOffsets.size())
       << "generic T.copy expects buffer rank to match inferred layout rank.";
   facts.coversWholeBuffer =
@@ -1183,6 +1190,8 @@ CodeGenTileLangNPUIRAPI::BuildCopyShapePlan(const SliceFacts &src,
   auto srcInfo = extract(src.sliceSizes);
   auto dstInfo = extract(dst.sliceSizes);
 
+  // After removing static-1 gaps, src and dst must expose the same number of
+  // backbone dimensions to be alignable at all.
   ICHECK(srcInfo.backbone.size() == dstInfo.backbone.size())
       << "generic T.copy backbone mismatch: src has " << srcInfo.backbone.size()
       << " non-singleton dims, dst has " << dstInfo.backbone.size()
@@ -1194,6 +1203,8 @@ CodeGenTileLangNPUIRAPI::BuildCopyShapePlan(const SliceFacts &src,
     int64_t dstDim = dstInfo.backbone[i];
     bool srcDyn = mlir::ShapedType::isDynamic(srcDim);
     bool dstDyn = mlir::ShapedType::isDynamic(dstDim);
+    // Each aligned backbone slot must agree statically, unless at least one
+    // side stays dynamic and we carry that uncertainty into the aligned shape.
     ICHECK(srcDyn || dstDyn || srcDim == dstDim)
         << "generic T.copy backbone dimension mismatch at position " << i
         << ": src=" << srcDim << ", dst=" << dstDim;
@@ -1223,6 +1234,8 @@ CodeGenTileLangNPUIRAPI::BuildCopyShapePlan(const SliceFacts &src,
   }
 
   if (plan.alignedShape.empty()) {
+    // Scalar-like copies still need one representative singleton dimension so
+    // the generic path can materialize a legal memref.copy view.
     ICHECK(!srcInfo.gapIdx.empty() && !srcInfo.gapIdx.front().empty() &&
            !dstInfo.gapIdx.empty() && !dstInfo.gapIdx.front().empty())
         << "generic T.copy could not derive a valid target shape.";
@@ -1231,6 +1244,8 @@ CodeGenTileLangNPUIRAPI::BuildCopyShapePlan(const SliceFacts &src,
     plan.dstKeptDims.push_back(dstInfo.gapIdx.front().front());
   }
 
+  // Every aligned dimension must correspond to exactly one kept source dim and
+  // one kept destination dim.
   ICHECK(plan.alignedShape.size() == plan.srcKeptDims.size() &&
          plan.alignedShape.size() == plan.dstKeptDims.size())
       << "generic T.copy internal error: target shape / kept-dim mismatch.";
@@ -1241,6 +1256,8 @@ CodeGenTileLangNPUIRAPI::ProjectedLayoutPlan
 CodeGenTileLangNPUIRAPI::BuildProjectedLayoutPlan(
     const SliceFacts &facts, llvm::ArrayRef<unsigned> keptDims,
     llvm::ArrayRef<int64_t> alignedShape) {
+  // The shape-alignment phase decides the projected rank; layout projection
+  // must consume exactly that many kept dimensions.
   ICHECK(keptDims.size() == alignedShape.size())
       << "generic T.copy internal error: projected rank mismatch.";
 
@@ -1251,6 +1268,7 @@ CodeGenTileLangNPUIRAPI::BuildProjectedLayoutPlan(
   layout.viewSizes.reserve(keptDims.size());
   for (size_t i = 0; i < keptDims.size(); ++i) {
     unsigned idx = keptDims[i];
+    // Each kept dim must refer back to a valid original slice/base-layout dim.
     ICHECK(idx < facts.baseLayoutStrides.size() && idx < facts.sliceSizes.size())
         << "generic T.copy internal error: kept index out of range.";
     int64_t stride = facts.baseLayoutStrides[idx];
@@ -1258,6 +1276,8 @@ CodeGenTileLangNPUIRAPI::BuildProjectedLayoutPlan(
         !mlir::ShapedType::isDynamic(canonicalStrides[i])) {
       stride = canonicalStrides[i];
     }
+    // Runtime min/extent are fine, but the active projected layout still has
+    // to lower to a concrete memref.copy-compatible stride pattern.
     ICHECK(!mlir::ShapedType::isDynamic(stride))
         << "generic T.copy requires statically-known projected strides; "
            "only contiguous dynamic base shape, dynamic range min/extent, "
@@ -1266,6 +1286,8 @@ CodeGenTileLangNPUIRAPI::BuildProjectedLayoutPlan(
     layout.viewSizes.push_back(facts.sliceSizes[idx]);
   }
 
+  // All original slice offsets contribute to the final view start, including
+  // dimensions later dropped from the aligned rank.
   layout.viewOffset =
       ComputeProjectedViewOffset(builder, builder.getUnknownLoc(),
                                  facts.baseLayoutOffset, facts.sliceOffsets,
@@ -1419,9 +1441,13 @@ void CodeGenTileLangNPUIRAPI::AscendCopyCodegen(const CallNode *op) {
   // memref.copy requires matching element type and logical shape, but the
   // projected src/dst views may legitimately differ in memory space and
   // physical layout (for example GM -> UB copies).
+  // If this fails, one of the earlier generic-copy planning stages produced
+  // incompatible view types for what should have been the same logical copy.
   ICHECK(src_ty.getElementType() == dst_ty.getElementType())
       << "generic T.copy internal error: src/dst projected views do not "
          "share the same element type.";
+  // The aligned copy contract is defined in terms of logical shape equality,
+  // not full memref type equality.
   ICHECK(src_ty.getShape() == dst_ty.getShape())
       << "generic T.copy internal error: src/dst projected views do not "
          "share the same logical shape.";
