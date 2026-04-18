@@ -251,6 +251,15 @@ PASS_CALL_RE = re.compile(
     """
 )
 
+NESTED_PASS_CALL_RE = re.compile(
+    r"""(?x)
+    \b(?P<pm>pm|passManager)\b
+    \.addNestedPass<\s*(?P<nest>[^>]+?)\s*>\s*\(\s*
+    (?:::)?(?:[\w:]+::)*?(?P<ctor>create\w+)
+    \s*\(
+    """
+)
+
 HELPER_CALL_RE = re.compile(
     r"""(?x)
     \b(?:(?P<ns>[\w:]+)::)?
@@ -585,6 +594,22 @@ class BodyWalker:
                 i = self._walk_if_chain(i, conditions)
                 continue
 
+            nested_pass_match = NESTED_PASS_CALL_RE.match(self.text, i)
+            if nested_pass_match:
+                self.steps.append(
+                    Step(
+                        kind="nested_pass",
+                        conditions=list(conditions),
+                        line=line_of(self.text, nested_pass_match.start()),
+                        constructor_fn=nested_pass_match.group("ctor"),
+                        nested_op=nested_pass_match.group("nest").strip(),
+                    )
+                )
+                op = self.text.find("(", nested_pass_match.end() - 1)
+                cl = self._balanced_paren(self.text, op) if op >= 0 else -1
+                i = cl + 1 if cl > 0 else nested_pass_match.end()
+                continue
+
             pass_match = PASS_CALL_RE.match(self.text, i)
             if pass_match:
                 self.steps.append(
@@ -646,7 +671,7 @@ class BodyWalker:
                         "isa",
                     )
                 ):
-                    kind = "helper_call" if fn in self.helper_names and not ns else "cross_call"
+                    kind = "helper_call" if fn in self.helper_names else "cross_call"
                     self.steps.append(
                         Step(
                             kind=kind,
@@ -826,6 +851,8 @@ def find_pipeline_cpp_files(root: Path) -> list[Path]:
         if (
             "PassPipelineRegistration" in text
             or ("PassManager" in text and ".addPass(" in text)
+            or ("PassManager" in text and ".addNestedPass<" in text)
+            or ("PassManager" in text and ".addNestedPass(" in text)
             or "runBiShengIRPipeline" in text
             or "runPipeline(" in text
         ):
@@ -1016,12 +1043,12 @@ def main(argv: list[str]) -> int:
     unreferenced = sorted(
         pass_def.flag
         for pass_def in pass_defs
-        if pass_def.constructor_fn and pass_def.flag not in referenced_flags
+        if pass_def.flag not in referenced_flags
     )
 
     coverage = {
         "passes_defined": len(pass_defs),
-        "passes_referenced": len(referenced_ctors & defined_ctors),
+        "passes_referenced": len(referenced_flags),
         "unreferenced_pass_flags": unreferenced,
         "referenced_unknown_constructors": sorted(referenced_ctors - defined_ctors),
         "pipeline_count": len(all_pipelines),

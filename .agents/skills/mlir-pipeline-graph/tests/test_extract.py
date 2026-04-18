@@ -266,3 +266,96 @@ def test_extract_counts_pipeline_constructor_references_in_coverage(
 
     assert coverage["passes_referenced"] == 1
     assert coverage["unreferenced_pass_flags"] == []
+
+
+def test_extract_parses_add_nested_pass_calls(tmp_path: Path):
+    repo = tmp_path / "repo"
+    root = repo / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+    (root / "include" / "bishengir" / "Transforms").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "Demo").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Transforms" / "Passes.td").write_text(
+        'def DemoPass : Pass<"demo-pass", "func::FuncOp"> { let constructor = "::mlir::createDemoPass()"; }'
+    )
+    (root / "lib" / "Dialect" / "Demo" / "Demo.cpp").write_text(
+        "void buildDemo(mlir::OpPassManager &pm) {\n"
+        "  pm.addNestedPass<func::FuncOp>(::mlir::createDemoPass());\n"
+        "}\n"
+    )
+
+    main(["extract.py", str(repo)])
+    skeleton = json.loads((repo / ".agent_pipelines" / "skeleton.json").read_text())
+
+    step = skeleton["builders"][0]["steps"][0]
+    assert step["kind"] == "nested_pass"
+    assert step["nested_op"] == "func::FuncOp"
+    assert step["flag"] == "demo-pass"
+
+
+def test_extract_counts_referenced_pass_flags_with_duplicate_constructors(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    root = repo / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+    (root / "include" / "bishengir" / "Dialect" / "HFusion").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Dialect" / "HIVM").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "HFusion").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "HIVM").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Dialect" / "HFusion" / "Passes.td").write_text(
+        'def HFusionFlattenPass : Pass<"hfusion-flatten", "mlir::ModuleOp"> { '
+        'let constructor = "::mlir::hfusion::createFlattenOpsPass()"; }'
+    )
+    (root / "include" / "bishengir" / "Dialect" / "HIVM" / "Passes.td").write_text(
+        'def HIVMFlattenPass : Pass<"hivm-flatten", "mlir::ModuleOp"> { '
+        'let constructor = "::mlir::hivm::createFlattenOpsPass()"; }'
+    )
+    (root / "lib" / "Dialect" / "HFusion" / "HFusion.cpp").write_text(
+        "void buildHFusion(mlir::OpPassManager &pm) {\n"
+        "  pm.addPass(::mlir::hfusion::createFlattenOpsPass());\n"
+        "}\n"
+    )
+    (root / "lib" / "Dialect" / "HIVM" / "HIVM.cpp").write_text(
+        "void buildHIVM(mlir::OpPassManager &pm) {\n"
+        "  pm.addPass(::mlir::hivm::createFlattenOpsPass());\n"
+        "}\n"
+    )
+
+    main(["extract.py", str(repo)])
+    coverage = json.loads((repo / ".agent_pipelines" / "coverage.json").read_text())
+
+    assert coverage["passes_defined"] == 2
+    assert coverage["passes_referenced"] == 2
+    assert coverage["unreferenced_pass_flags"] == []
+
+
+def test_extract_links_qualified_local_builder_calls_from_pipeline_registration(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    root = repo / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+    (root / "include" / "bishengir" / "Transforms").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "Demo").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Transforms" / "Passes.td").write_text(
+        'def DemoPass : Pass<"demo-pass", "mlir::ModuleOp"> { let constructor = "::mlir::createDemoPass()"; }'
+    )
+    (root / "lib" / "Dialect" / "Demo" / "Demo.cpp").write_text(
+        "namespace bishengir {\n"
+        "void createDemoPipeline(mlir::OpPassManager &pm) {\n"
+        "  pm.addPass(::mlir::createDemoPass());\n"
+        "}\n"
+        'static mlir::PassPipelineRegistration<>("demo-pipeline", "demo desc", [](mlir::OpPassManager &pm) {\n'
+        "  bishengir::createDemoPipeline(pm);\n"
+        "});\n"
+        "}\n"
+    )
+
+    main(["extract.py", str(repo)])
+    skeleton = json.loads((repo / ".agent_pipelines" / "skeleton.json").read_text())
+
+    pipeline_step = skeleton["pipelines"][0]["steps"][0]
+    builder = skeleton["builders"][0]
+
+    assert pipeline_step["kind"] == "helper_call"
+    assert pipeline_step["target"] == "createDemoPipeline"
+    assert builder["name"] == "createDemoPipeline"
+    assert builder["is_pipeline"] is True
+    assert builder["pipeline_name"] == "demo-pipeline"
