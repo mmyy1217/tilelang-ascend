@@ -338,7 +338,6 @@ def preprocessor_conditions_at(text: str, limit: int) -> list[str]:
     """Return active top-level preprocessor directive lines at byte offset limit."""
     conditions: list[str] = []
     branch_stack: list[str] = []
-    brace_depth = 0
     in_str = False
     i = 0
 
@@ -355,13 +354,8 @@ def preprocessor_conditions_at(text: str, limit: int) -> list[str]:
 
         if c == '"':
             in_str = True
-        elif c == "{":
-            brace_depth += 1
-        elif c == "}":
-            brace_depth = max(0, brace_depth - 1)
         elif (
             c == "#"
-            and brace_depth == 0
             and (i == 0 or text[i - 1] == "\n")
         ):
             line_end = text.find("\n", i, limit)
@@ -855,13 +849,14 @@ def parse_cpp_file(path: Path) -> tuple[list[Builder], list[dict]]:
     regs = find_pipeline_registrations(text)
     pipelines: list[dict] = []
     for reg in regs:
+        reg_conditions = preprocessor_conditions_at(text, offset_of_line(text, reg["line"]))
         if reg["body_open"] < 0:
             steps_dicts = []
             if reg.get("entry_builder"):
                 steps_dicts.append(
                     {
                         "kind": "helper_call",
-                        "conditions": [],
+                        "conditions": reg_conditions,
                         "line": reg["line"],
                         "constructor_fn": None,
                         "nested_op": None,
@@ -891,9 +886,7 @@ def parse_cpp_file(path: Path) -> tuple[list[Builder], list[dict]]:
             continue
 
         walker = BodyWalker(text, reg["body_open"] + 1, reg["body_close"], helper_names)
-        walker.walk(
-            conditions=preprocessor_conditions_at(text, offset_of_line(text, reg["line"]))
-        )
+        walker.walk(conditions=reg_conditions)
         pipelines.append(
             {
                 "name": reg["name"],
@@ -1008,6 +1001,14 @@ def main(argv: list[str]) -> int:
             if step.constructor_fn:
                 referenced_ctors.add(step.constructor_fn)
                 flag = resolve_flag(step.constructor_fn, builder.file)
+                if flag:
+                    referenced_flags.add(flag)
+    for pipeline in all_pipelines:
+        for step in pipeline["steps"]:
+            constructor_fn = step.get("constructor_fn")
+            if constructor_fn:
+                referenced_ctors.add(constructor_fn)
+                flag = resolve_flag(constructor_fn, pipeline["file"])
                 if flag:
                     referenced_flags.add(flag)
 
