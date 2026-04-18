@@ -54,3 +54,22 @@ def test_validate_pass_research_rejects_non_object_example():
         assert "example" in str(exc)
     else:
         raise AssertionError("expected ValidationError")
+
+
+def test_validate_pass_research_rejects_placeholder_fallback():
+    record = {
+        "flag": "annotation-lowering",
+        "summary": "Erase annotation.mark ops.",
+        "key_options": [],
+        "dialects_touched": ["annotation"],
+        "example": None,
+        "example_missing_reason": "TBD",
+        "fallback_evidence": {},
+    }
+
+    try:
+        validate_pass_research(record)
+    except ValidationError as exc:
+        assert "meaningful" in str(exc)
+    else:
+        raise AssertionError("expected ValidationError")
