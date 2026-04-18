@@ -104,6 +104,18 @@ def line_of(text: str, idx: int) -> int:
     return text.count("\n", 0, idx) + 1
 
 
+def offset_of_line(text: str, line: int) -> int:
+    if line <= 1:
+        return 0
+    offset = 0
+    for _ in range(line - 1):
+        nl = text.find("\n", offset)
+        if nl < 0:
+            return len(text)
+        offset = nl + 1
+    return offset
+
+
 PASS_DEF_RE = re.compile(
     r"\bdef\s+(\w+)\s*:\s*Pass<\s*\"([^\"]+)\"\s*(?:,\s*\"([^\"]*)\")?\s*>",
 )
@@ -576,55 +588,7 @@ class BodyWalker:
                 i = j + 1
                 continue
             if self.text.startswith("if", i) and (i + 2 < self.end) and self.text[i + 2] in " \t\n(":
-                pop = self.text.find("(", i)
-                if pop < 0:
-                    i += 2
-                    continue
-                pcl = self._balanced_paren(self.text, pop)
-                if pcl < 0:
-                    i = pop + 1
-                    continue
-                cond = re.sub(r"\s+", " ", self.text[pop + 1 : pcl].strip())
-                k = pcl + 1
-                while k < self.end and self.text[k].isspace():
-                    k += 1
-                if k < self.end and self.text[k] == "{":
-                    body_close = self._matched_brace(self.text, k)
-                    sub = BodyWalker(self.text, k + 1, body_close, self.helper_names)
-                    sub.walk(conditions + [cond])
-                    self.steps.extend(sub.steps)
-                    i = body_close + 1
-                else:
-                    stmt_end = self._stmt_end(self.text, k, self.end)
-                    sub = BodyWalker(self.text, k, stmt_end, self.helper_names)
-                    sub.walk(conditions + [cond])
-                    self.steps.extend(sub.steps)
-                    i = stmt_end + 1
-
-                k = i
-                while k < self.end and self.text[k].isspace():
-                    k += 1
-                if self.text.startswith("else", k):
-                    k2 = k + 4
-                    while k2 < self.end and self.text[k2].isspace():
-                        k2 += 1
-                    if k2 < self.end and self.text[k2] == "{":
-                        body_close = self._matched_brace(self.text, k2)
-                        sub = BodyWalker(self.text, k2 + 1, body_close, self.helper_names)
-                        sub.walk(conditions + [f"!({cond})"])
-                        self.steps.extend(sub.steps)
-                        i = body_close + 1
-                    elif self.text.startswith("if", k2):
-                        sub = BodyWalker(self.text, k2, self.end, self.helper_names)
-                        sub.walk(conditions + [f"!({cond})"])
-                        self.steps.extend(sub.steps)
-                        i = self.end
-                    else:
-                        stmt_end = self._stmt_end(self.text, k2, self.end)
-                        sub = BodyWalker(self.text, k2, stmt_end, self.helper_names)
-                        sub.walk(conditions + [f"!({cond})"])
-                        self.steps.extend(sub.steps)
-                        i = stmt_end + 1
+                i = self._walk_if_chain(i, conditions)
                 continue
 
             pass_match = PASS_CALL_RE.match(self.text, i)
@@ -716,6 +680,52 @@ class BodyWalker:
                     rest = f"!({rest})"
                 return rest
         return s
+
+    def _walk_if_chain(self, start: int, conditions: list[str]) -> int:
+        pop = self.text.find("(", start)
+        if pop < 0:
+            return start + 2
+        pcl = self._balanced_paren(self.text, pop)
+        if pcl < 0:
+            return pop + 1
+        cond = re.sub(r"\s+", " ", self.text[pop + 1 : pcl].strip())
+        k = pcl + 1
+        while k < self.end and self.text[k].isspace():
+            k += 1
+        if k < self.end and self.text[k] == "{":
+            body_close = self._matched_brace(self.text, k)
+            sub = BodyWalker(self.text, k + 1, body_close, self.helper_names)
+            sub.walk(conditions + [cond])
+            self.steps.extend(sub.steps)
+            next_i = body_close + 1
+        else:
+            stmt_end = self._stmt_end(self.text, k, self.end)
+            sub = BodyWalker(self.text, k, stmt_end, self.helper_names)
+            sub.walk(conditions + [cond])
+            self.steps.extend(sub.steps)
+            next_i = stmt_end + 1
+
+        k = next_i
+        while k < self.end and self.text[k].isspace():
+            k += 1
+        if self.text.startswith("else", k):
+            k2 = k + 4
+            while k2 < self.end and self.text[k2].isspace():
+                k2 += 1
+            if k2 < self.end and self.text[k2] == "{":
+                body_close = self._matched_brace(self.text, k2)
+                sub = BodyWalker(self.text, k2 + 1, body_close, self.helper_names)
+                sub.walk(conditions + [f"!({cond})"])
+                self.steps.extend(sub.steps)
+                return body_close + 1
+            if self.text.startswith("if", k2):
+                return self._walk_if_chain(k2, conditions + [f"!({cond})"])
+            stmt_end = self._stmt_end(self.text, k2, self.end)
+            sub = BodyWalker(self.text, k2, stmt_end, self.helper_names)
+            sub.walk(conditions + [f"!({cond})"])
+            self.steps.extend(sub.steps)
+            return stmt_end + 1
+        return next_i
 
     @staticmethod
     def _find_pp_close(text: str, start: int, end: int) -> int:
@@ -881,7 +891,9 @@ def parse_cpp_file(path: Path) -> tuple[list[Builder], list[dict]]:
             continue
 
         walker = BodyWalker(text, reg["body_open"] + 1, reg["body_close"], helper_names)
-        walker.walk(conditions=preprocessor_conditions_at(text, reg["line"]))
+        walker.walk(
+            conditions=preprocessor_conditions_at(text, offset_of_line(text, reg["line"]))
+        )
         pipelines.append(
             {
                 "name": reg["name"],
