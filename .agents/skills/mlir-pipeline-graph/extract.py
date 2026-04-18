@@ -228,16 +228,23 @@ def parse_passes_td(td_path: Path) -> list[PassDef]:
 
 FUNC_DEF_RE = re.compile(
     r"""(?mx)
-    ^
+    ^[ \t]*
     (?:static\s+)?
     (?:inline\s+)?
     (?:llvm::)?(?:void|LogicalResult)\s+
-    (?:[\w:]+::)?
+    (?:(?P<qualifier>[\w:]+)::)?
     (?P<name>\w+)
     \s*\(
     (?P<sig>[^){]*)
     \)
     \s*\{
+    """
+)
+DIRECT_CONSTRUCTOR_CALL_RE = re.compile(
+    r"""(?x)
+    ^\s*
+    (?:::)?(?:[\w:]+::)*?(?P<ctor>create\w+)
+    \s*\(
     """
 )
 
@@ -274,6 +281,7 @@ LOCAL_ASSIGN_RE = re.compile(
     \s*=\s*
     """
 )
+QUALIFIED_NAME_RE = re.compile(r"(?:(?P<ns>[\w:]+)::)?(?P<name>\w+)$")
 
 RUN_PIPELINE_RE = re.compile(
     r"""(?x)
@@ -315,7 +323,62 @@ class Builder:
     options_class: Optional[str] = None
 
 
-def find_function_bodies(text: str) -> list[tuple[str, int, int, int]]:
+def namespace_at(text: str, limit: int) -> Optional[str]:
+    stack: list[tuple[str, int]] = []
+    i = 0
+    in_str = False
+
+    while i < limit:
+        c = text[i]
+        if in_str:
+            if c == "\\" and i + 1 < limit:
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+
+        if c == '"':
+            in_str = True
+            i += 1
+            continue
+
+        if c.isalpha() or c == "_":
+            ns_match = re.match(
+                r"namespace\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*\{",
+                text[i:limit],
+            )
+            if ns_match:
+                stack.append((ns_match.group(1), 1))
+                i += ns_match.end()
+                continue
+        if c == "{":
+            if stack:
+                name, depth = stack[-1]
+                stack[-1] = (name, depth + 1)
+        elif c == "}":
+            if stack:
+                name, depth = stack[-1]
+                depth -= 1
+                if depth == 0:
+                    stack.pop()
+                else:
+                    stack[-1] = (name, depth)
+        i += 1
+
+    if not stack:
+        return None
+    return "::".join(name for name, _ in stack)
+
+
+def qualify_name(name: str, namespace: Optional[str]) -> str:
+    return f"{namespace}::{name}" if namespace else name
+
+
+def find_function_bodies(
+    text: str,
+) -> list[tuple[str, Optional[str], str, int, int, int]]:
     out = []
     for match in FUNC_DEF_RE.finditer(text):
         if "PassManager" not in match.group("sig"):
@@ -344,7 +407,17 @@ def find_function_bodies(text: str) -> list[tuple[str, int, int, int]]:
             i += 1
         if depth != 0:
             continue
-        out.append((match.group("name"), match.start(), body_open, i - 1))
+        ns = match.group("qualifier") or namespace_at(text, match.start())
+        out.append(
+            (
+                match.group("name"),
+                ns,
+                qualify_name(match.group("name"), ns),
+                match.start(),
+                body_open,
+                i - 1,
+            )
+        )
     return out
 
 
@@ -352,40 +425,22 @@ def preprocessor_conditions_at(text: str, limit: int) -> list[str]:
     """Return active top-level preprocessor directive lines at byte offset limit."""
     conditions: list[str] = []
     branch_stack: list[str] = []
-    in_str = False
     i = 0
 
     while i < limit:
-        c = text[i]
-        if in_str:
-            if c == "\\" and i + 1 < limit:
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-            i += 1
-            continue
-
-        if c == '"':
-            in_str = True
-        elif (
-            c == "#"
-            and (i == 0 or text[i - 1] == "\n")
-        ):
-            line_end = text.find("\n", i, limit)
-            if line_end < 0:
-                line_end = limit
-            line = text[i:line_end].strip()
-            if line.startswith("#if"):
-                branch_stack.append(line)
-            elif line.startswith("#elif") and branch_stack:
-                branch_stack[-1] = line
-            elif line.startswith("#else") and branch_stack:
-                branch_stack[-1] = line
-            elif line.startswith("#endif") and branch_stack:
-                branch_stack.pop()
-            i = line_end
-        i += 1
+        line_end = text.find("\n", i, limit)
+        if line_end < 0:
+            line_end = limit
+        line = text[i:line_end].lstrip(" \t")
+        if line.startswith("#if"):
+            branch_stack.append(line.strip())
+        elif line.startswith("#elif") and branch_stack:
+            branch_stack[-1] = line.strip()
+        elif line.startswith("#else") and branch_stack:
+            branch_stack[-1] = line.strip()
+        elif line.startswith("#endif") and branch_stack:
+            branch_stack.pop()
+        i = line_end + 1
 
     return list(branch_stack)
 
@@ -473,11 +528,13 @@ def find_pipeline_registrations(text: str) -> list[dict]:
 
         if body_open < 0:
             entry_fn = None
+            entry_ns = None
             tail = text[pos:call_close].strip().rstrip(",").strip()
             if tail:
-                entry_fn = re.sub(r".*::", "", tail).strip()
-                fn_match = re.match(r"\w+", entry_fn)
-                entry_fn = fn_match.group(0) if fn_match else None
+                fn_match = QUALIFIED_NAME_RE.search(tail)
+                if fn_match:
+                    entry_fn = fn_match.group("name")
+                    entry_ns = fn_match.group("ns")
             out.append(
                 {
                     "name": name,
@@ -486,7 +543,9 @@ def find_pipeline_registrations(text: str) -> list[dict]:
                     "body_open": -1,
                     "body_close": -1,
                     "entry_builder": entry_fn,
+                    "entry_builder_namespace": entry_ns,
                     "line": line_of(text, match.start()),
+                    "offset": match.start(),
                 }
             )
             continue
@@ -499,6 +558,7 @@ def find_pipeline_registrations(text: str) -> list[dict]:
                 "body_open": body_open,
                 "body_close": i - 1,
                 "line": line_of(text, match.start()),
+                "offset": match.start(),
             }
         )
     return out
@@ -511,21 +571,31 @@ class BodyWalker:
         start: int,
         end: int,
         helper_names: set[str],
+        current_namespace: Optional[str] = None,
+        known_pass_constructors: Optional[set[str]] = None,
         local_pass_ctors: Optional[dict[str, Optional[str]]] = None,
     ):
         self.text = text
         self.start = start
         self.end = end
         self.helper_names = helper_names
+        self.current_namespace = current_namespace
+        self.known_pass_constructors = known_pass_constructors or set()
         self.local_pass_ctors = (
             {} if local_pass_ctors is None else dict(local_pass_ctors)
         )
         self.steps: list[Step] = []
 
     def _find_constructor_fn(self, expr: str) -> Optional[str]:
+        direct_match = DIRECT_CONSTRUCTOR_CALL_RE.match(expr)
+        if direct_match:
+            return direct_match.group("ctor")
+
         ctor_match = CONSTRUCTOR_FN_RE.search(expr)
         if ctor_match:
-            return ctor_match.group(1)
+            ctor = ctor_match.group(1)
+            if ctor in self.known_pass_constructors:
+                return ctor
 
         best_match: tuple[int, Optional[str]] | None = None
         for name, constructor_fn in self.local_pass_ctors.items():
@@ -544,8 +614,9 @@ class BodyWalker:
             return None
         stmt_end = self._stmt_end(self.text, assign_match.end(), self.end)
         rhs = self.text[assign_match.end() : stmt_end]
-        constructor_fn = self._find_constructor_fn(rhs)
-        if constructor_fn:
+        direct_match = DIRECT_CONSTRUCTOR_CALL_RE.match(rhs)
+        constructor_fn = direct_match.group("ctor") if direct_match else None
+        if constructor_fn and constructor_fn in self.known_pass_constructors:
             self.local_pass_ctors[assign_match.group("name")] = constructor_fn
         else:
             self.local_pass_ctors.pop(assign_match.group("name"), None)
@@ -630,6 +701,8 @@ class BodyWalker:
                             branch_start,
                             branch_end,
                             self.helper_names,
+                            self.current_namespace,
+                            self.known_pass_constructors,
                             self.local_pass_ctors,
                         )
                         sub.walk(conditions + [branch_directive])
@@ -742,7 +815,7 @@ class BodyWalker:
                             conditions=list(conditions),
                             line=line_of(self.text, helper_match.start()),
                             target=fn,
-                            target_namespace=ns,
+                            target_namespace=ns or self.current_namespace,
                         )
                     )
                     op = self.text.find("(", i)
@@ -782,6 +855,8 @@ class BodyWalker:
                 k + 1,
                 body_close,
                 self.helper_names,
+                self.current_namespace,
+                self.known_pass_constructors,
                 self.local_pass_ctors,
             )
             sub.walk(conditions + [cond])
@@ -794,6 +869,8 @@ class BodyWalker:
                 k,
                 stmt_end,
                 self.helper_names,
+                self.current_namespace,
+                self.known_pass_constructors,
                 self.local_pass_ctors,
             )
             sub.walk(conditions + [cond])
@@ -814,6 +891,8 @@ class BodyWalker:
                     k2 + 1,
                     body_close,
                     self.helper_names,
+                    self.current_namespace,
+                    self.known_pass_constructors,
                     self.local_pass_ctors,
                 )
                 sub.walk(conditions + [f"!({cond})"])
@@ -827,6 +906,8 @@ class BodyWalker:
                 k2,
                 stmt_end,
                 self.helper_names,
+                self.current_namespace,
+                self.known_pass_constructors,
                 self.local_pass_ctors,
             )
             sub.walk(conditions + [f"!({cond})"])
@@ -948,23 +1029,50 @@ def find_pipeline_cpp_files(root: Path) -> list[Path]:
     return out
 
 
-def parse_cpp_file(path: Path) -> tuple[list[Builder], list[dict]]:
+def parse_cpp_file(
+    path: Path, known_pass_constructors: set[str]
+) -> tuple[list[Builder], list[dict]]:
     text = strip_comments(path.read_text(errors="replace"))
     fn_bodies = find_function_bodies(text)
-    helper_names = {name for name, _, _, _ in fn_bodies}
+    helper_names = {name for name, _, _, _, _, _ in fn_bodies}
 
     builders: list[Builder] = []
-    for name, sig_start, body_open, body_close in fn_bodies:
+    builder_qualified_names: dict[tuple[str, int], str] = {}
+    for name, ns, qualified_name, sig_start, body_open, body_close in fn_bodies:
         builder = Builder(name=name, file=str(path), line=line_of(text, sig_start))
-        walker = BodyWalker(text, body_open + 1, body_close, helper_names - {name})
+        walker = BodyWalker(
+            text,
+            body_open + 1,
+            body_close,
+            helper_names - {name},
+            current_namespace=ns,
+            known_pass_constructors=known_pass_constructors,
+        )
         walker.walk(conditions=preprocessor_conditions_at(text, sig_start))
         builder.steps = walker.steps
         builders.append(builder)
+        builder_qualified_names[(builder.name, builder.line)] = qualified_name
+
+    def find_matching_builders(
+        target: str, target_namespace: Optional[str]
+    ) -> list[Builder]:
+        if target_namespace:
+            qualified_target = qualify_name(target, target_namespace)
+            matches = [
+                builder
+                for builder in builders
+                if builder_qualified_names[(builder.name, builder.line)]
+                == qualified_target
+            ]
+            if matches:
+                return matches
+        return [builder for builder in builders if builder.name == target]
 
     regs = find_pipeline_registrations(text)
     pipelines: list[dict] = []
     for reg in regs:
         reg_conditions = preprocessor_conditions_at(text, offset_of_line(text, reg["line"]))
+        reg_namespace = namespace_at(text, reg["offset"])
         if reg["body_open"] < 0:
             steps_dicts = []
             if reg.get("entry_builder"):
@@ -977,7 +1085,8 @@ def parse_cpp_file(path: Path) -> tuple[list[Builder], list[dict]]:
                         "nested_op": None,
                         "flag": None,
                         "target": reg["entry_builder"],
-                        "target_namespace": None,
+                        "target_namespace": reg.get("entry_builder_namespace")
+                        or reg_namespace,
                         "label": None,
                     }
                 )
@@ -992,15 +1101,24 @@ def parse_cpp_file(path: Path) -> tuple[list[Builder], list[dict]]:
                 }
             )
             if reg.get("entry_builder"):
-                for builder in builders:
-                    if builder.name == reg["entry_builder"]:
-                        builder.is_pipeline = True
-                        builder.pipeline_name = reg["name"]
-                        builder.pipeline_desc = reg["desc"]
-                        builder.options_class = reg["options_class"]
+                for builder in find_matching_builders(
+                    reg["entry_builder"],
+                    reg.get("entry_builder_namespace") or reg_namespace,
+                ):
+                    builder.is_pipeline = True
+                    builder.pipeline_name = reg["name"]
+                    builder.pipeline_desc = reg["desc"]
+                    builder.options_class = reg["options_class"]
             continue
 
-        walker = BodyWalker(text, reg["body_open"] + 1, reg["body_close"], helper_names)
+        walker = BodyWalker(
+            text,
+            reg["body_open"] + 1,
+            reg["body_close"],
+            helper_names,
+            current_namespace=reg_namespace,
+            known_pass_constructors=known_pass_constructors,
+        )
         walker.walk(conditions=reg_conditions)
         pipelines.append(
             {
@@ -1015,12 +1133,13 @@ def parse_cpp_file(path: Path) -> tuple[list[Builder], list[dict]]:
         if walker.steps:
             for step in walker.steps:
                 if step.kind == "helper_call" and step.target:
-                    for builder in builders:
-                        if builder.name == step.target:
-                            builder.is_pipeline = True
-                            builder.pipeline_name = reg["name"]
-                            builder.pipeline_desc = reg["desc"]
-                            builder.options_class = reg["options_class"]
+                    for builder in find_matching_builders(
+                        step.target, step.target_namespace
+                    ):
+                        builder.is_pipeline = True
+                        builder.pipeline_name = reg["name"]
+                        builder.pipeline_desc = reg["desc"]
+                        builder.options_class = reg["options_class"]
     return builders, pipelines
 
 
@@ -1069,6 +1188,7 @@ def main(argv: list[str]) -> int:
             ctor_candidates.setdefault(pass_def.constructor_fn, []).append(
                 (pass_def.constructor_namespace, pass_def.flag)
             )
+    known_pass_constructors = set(ctor_candidates)
 
     def resolve_flag(constructor: str, file_path: str) -> Optional[str]:
         candidates = ctor_candidates.get(constructor, [])
@@ -1086,7 +1206,7 @@ def main(argv: list[str]) -> int:
     all_pipelines: list[dict] = []
     for cpp in find_pipeline_cpp_files(root):
         try:
-            builders, pipelines = parse_cpp_file(cpp)
+            builders, pipelines = parse_cpp_file(cpp, known_pass_constructors)
         except Exception as exc:
             print(f"[extract] WARN parse failed for {cpp}: {exc}", file=sys.stderr)
             continue

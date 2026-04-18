@@ -344,6 +344,133 @@ def test_extract_recovers_constructor_from_inline_wrapped_add_pass(
     assert steps[0]["flag"] == "demo-pass"
 
 
+def test_extract_does_not_recover_unrelated_wrapped_local_constructor(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    root = repo / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+    (root / "include" / "bishengir" / "Transforms").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "Demo").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Transforms" / "Passes.td").write_text(
+        'def DemoPass : Pass<"demo-pass", "mlir::ModuleOp"> { let constructor = "::mlir::createDemoPass()"; }'
+    )
+    (root / "lib" / "Dialect" / "Demo" / "Demo.cpp").write_text(
+        "void buildDemo(mlir::OpPassManager &pm) {\n"
+        "  auto unrelated = createNotAPass();\n"
+        "  pm.addPass(wrap(unrelated));\n"
+        "}\n"
+    )
+
+    main(["extract.py", str(repo)])
+    skeleton = json.loads((repo / ".agent_pipelines" / "skeleton.json").read_text())
+
+    steps = skeleton["builders"][0]["steps"]
+    assert len(steps) == 1
+    assert steps[0]["kind"] == "pass"
+    assert steps[0]["constructor_fn"] is None
+    assert steps[0]["flag"] is None
+
+
+def test_extract_matches_indented_namespaced_builder_definition(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    root = repo / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+    (root / "include" / "bishengir" / "Transforms").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "Demo").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Transforms" / "Passes.td").write_text(
+        'def DemoPass : Pass<"demo-pass", "mlir::ModuleOp"> { let constructor = "::mlir::createDemoPass()"; }'
+    )
+    (root / "lib" / "Dialect" / "Demo" / "Demo.cpp").write_text(
+        "namespace demo {\n"
+        "  void buildDemo(mlir::OpPassManager &pm) {\n"
+        "    pm.addPass(::mlir::createDemoPass());\n"
+        "  }\n"
+        '  static mlir::PassPipelineRegistration<>("demo-pipeline", "demo desc", buildDemo);\n'
+        "}\n"
+    )
+
+    main(["extract.py", str(repo)])
+    skeleton = json.loads((repo / ".agent_pipelines" / "skeleton.json").read_text())
+
+    assert [builder["name"] for builder in skeleton["builders"]] == ["buildDemo"]
+    assert skeleton["builders"][0]["is_pipeline"] is True
+    assert skeleton["builders"][0]["pipeline_name"] == "demo-pipeline"
+    assert skeleton["pipelines"][0]["steps"][0]["target"] == "buildDemo"
+    assert skeleton["pipelines"][0]["steps"][0]["target_namespace"] == "demo"
+
+
+def test_extract_uses_namespace_when_linking_same_named_pipeline_builders(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    root = repo / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+    (root / "include" / "bishengir" / "Transforms").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "Demo").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Transforms" / "Passes.td").write_text(
+        'def AlphaPass : Pass<"alpha-pass", "mlir::ModuleOp"> { let constructor = "::mlir::createAlphaPass()"; }\n'
+        'def BetaPass : Pass<"beta-pass", "mlir::ModuleOp"> { let constructor = "::mlir::createBetaPass()"; }\n'
+    )
+    (root / "lib" / "Dialect" / "Demo" / "Demo.cpp").write_text(
+        "namespace alpha {\n"
+        "void buildShared(mlir::OpPassManager &pm) {\n"
+        "  pm.addPass(::mlir::createAlphaPass());\n"
+        "}\n"
+        "}\n"
+        "namespace beta {\n"
+        "void buildShared(mlir::OpPassManager &pm) {\n"
+        "  pm.addPass(::mlir::createBetaPass());\n"
+        "}\n"
+        "}\n"
+        'static mlir::PassPipelineRegistration<>("alpha-pipeline", "alpha desc", alpha::buildShared);\n'
+        'static mlir::PassPipelineRegistration<>("beta-pipeline", "beta desc", [](mlir::OpPassManager &pm) {\n'
+        "  beta::buildShared(pm);\n"
+        "});\n"
+    )
+
+    main(["extract.py", str(repo)])
+    skeleton = json.loads((repo / ".agent_pipelines" / "skeleton.json").read_text())
+
+    pipeline_builders = [builder for builder in skeleton["builders"] if builder["is_pipeline"]]
+    assert len(pipeline_builders) == 2
+    assert sorted(builder["pipeline_name"] for builder in pipeline_builders) == [
+        "alpha-pipeline",
+        "beta-pipeline",
+    ]
+    by_flag = {builder["steps"][0]["flag"]: builder for builder in pipeline_builders}
+    assert by_flag["alpha-pass"]["pipeline_name"] == "alpha-pipeline"
+    assert by_flag["beta-pass"]["pipeline_name"] == "beta-pipeline"
+    beta_pipeline = next(
+        pipeline for pipeline in skeleton["pipelines"] if pipeline["name"] == "beta-pipeline"
+    )
+    assert beta_pipeline["steps"][0]["target"] == "buildShared"
+    assert beta_pipeline["steps"][0]["target_namespace"] == "beta"
+
+
+def test_extract_preserves_outer_preprocessor_conditions_with_leading_whitespace(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    root = repo / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+    (root / "include" / "bishengir" / "Transforms").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "Demo").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Transforms" / "Passes.td").write_text(
+        'def DemoPass : Pass<"demo-pass", "mlir::ModuleOp"> { let constructor = "::mlir::createDemoPass()"; }'
+    )
+    (root / "lib" / "Dialect" / "Demo" / "Demo.cpp").write_text(
+        "  #if FEATURE_PIPE\n"
+        "  void buildDemo(mlir::OpPassManager &pm) {\n"
+        "    pm.addPass(::mlir::createDemoPass());\n"
+        "  }\n"
+        "  #endif\n"
+    )
+
+    main(["extract.py", str(repo)])
+    skeleton = json.loads((repo / ".agent_pipelines" / "skeleton.json").read_text())
+
+    assert skeleton["builders"][0]["steps"][0]["conditions"] == ["#if FEATURE_PIPE"]
+
+
 def test_extract_counts_referenced_pass_flags_with_duplicate_constructors(
     tmp_path: Path,
 ):
