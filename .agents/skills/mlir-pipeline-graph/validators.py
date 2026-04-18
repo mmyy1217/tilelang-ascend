@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from models import ValidationError, require_keys
 
 
@@ -12,9 +14,9 @@ def validate_pass_research(payload: dict) -> dict:
         raise ValidationError("example or explicit fallback_evidence is required")
 
     if has_example:
-        require_keys(
-            payload["example"],
-            ["test_path", "run_line", "input_ir", "output_ir", "check_lines", "evidence_type"],
-        )
+        example = payload["example"]
+        if not isinstance(example, Mapping):
+            raise ValidationError("example must be a mapping")
+        require_keys(example, ["test_path", "run_line", "input_ir", "output_ir", "check_lines", "evidence_type"])
 
     return payload

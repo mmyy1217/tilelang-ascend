@@ -37,3 +37,20 @@ def test_validate_pass_research_rejects_missing_example_and_fallback():
         assert "example" in str(exc)
     else:
         raise AssertionError("expected ValidationError")
+
+
+def test_validate_pass_research_rejects_non_object_example():
+    record = {
+        "flag": "annotation-lowering",
+        "summary": "Erase annotation.mark ops.",
+        "key_options": [],
+        "dialects_touched": ["annotation"],
+        "example": "not-an-example-object",
+    }
+
+    try:
+        validate_pass_research(record)
+    except ValidationError as exc:
+        assert "example" in str(exc)
+    else:
+        raise AssertionError("expected ValidationError")
