@@ -2,7 +2,7 @@
   "bishengir_root": "3rdparty/AscendNPU-IR-Dev/bishengir",
   "builders": [
     {
-      "file": "repo/3rdparty/AscendNPU-IR-Dev/bishengir/lib/Dialect/Demo/Demo.cpp",
+      "file": "/repo/3rdparty/AscendNPU-IR-Dev/bishengir/lib/Dialect/Demo/Demo.cpp",
       "is_pipeline": false,
       "line": 1,
       "name": "buildDemo",
@@ -11,10 +11,10 @@
       "pipeline_name": null,
       "steps": [
         {
-          "kind": "pass",
           "conditions": [],
           "constructor_fn": "createDemoPass",
           "flag": "demo-pass",
+          "kind": "pass",
           "label": null,
           "line": 1,
           "nested_op": null,
@@ -44,7 +44,7 @@
       "op": "mlir::ModuleOp",
       "options": [],
       "summary": "",
-      "td_file": "repo/3rdparty/AscendNPU-IR-Dev/bishengir/include/bishengir/Transforms/Passes.td",
+      "td_file": "/repo/3rdparty/AscendNPU-IR-Dev/bishengir/include/bishengir/Transforms/Passes.td",
       "td_line": 1
     }
   ],

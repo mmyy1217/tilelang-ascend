@@ -323,9 +323,9 @@ def find_function_bodies(text: str) -> list[tuple[str, int, int, int]]:
 
 
 def preprocessor_conditions_at(text: str, limit: int) -> list[str]:
-    """Return active top-level preprocessor conditions at byte offset limit."""
+    """Return active top-level preprocessor directive lines at byte offset limit."""
     conditions: list[str] = []
-    branch_stack: list[dict[str, list[str] | str]] = []
+    branch_stack: list[str] = []
     brace_depth = 0
     in_str = False
     i = 0
@@ -357,29 +357,17 @@ def preprocessor_conditions_at(text: str, limit: int) -> list[str]:
                 line_end = limit
             line = text[i:line_end].strip()
             if line.startswith("#if"):
-                expr = BodyWalker._pp_expr(line)
-                branch_stack.append({"seen": [expr], "current": expr})
+                branch_stack.append(line)
             elif line.startswith("#elif") and branch_stack:
-                expr = BodyWalker._pp_expr(line)
-                top = branch_stack[-1]
-                seen = top["seen"]  # type: ignore[assignment]
-                negated = " && ".join(f"!({item})" for item in seen)
-                top["current"] = f"{negated} && ({expr})" if negated else expr
-                seen.append(expr)
+                branch_stack[-1] = line
             elif line.startswith("#else") and branch_stack:
-                top = branch_stack[-1]
-                seen = top["seen"]  # type: ignore[assignment]
-                top["current"] = " && ".join(f"!({item})" for item in seen)
+                branch_stack[-1] = line
             elif line.startswith("#endif") and branch_stack:
                 branch_stack.pop()
             i = line_end
         i += 1
 
-    for frame in branch_stack:
-        current = frame.get("current")
-        if isinstance(current, str) and current:
-            conditions.append(current)
-    return conditions
+    return list(branch_stack)
 
 
 def _join_adjacent_strings(text: str, start: int, stop: int) -> tuple[str, int]:
@@ -572,15 +560,14 @@ class BodyWalker:
                     j = nxt
                 line = line.strip()
                 if line.startswith("#if"):
-                    cond = self._pp_expr(line)
                     body_start = j + 1
                     body_end = self._find_pp_close(self.text, body_start, self.end)
                     branches = self._split_pp_branches(
-                        self.text, body_start, body_end, cond
+                        self.text, body_start, body_end, line
                     )
-                    for branch_start, branch_end, branch_cond in branches:
+                    for branch_start, branch_end, branch_directive in branches:
                         sub = BodyWalker(self.text, branch_start, branch_end, self.helper_names)
-                        sub.walk(conditions + [f"#if {branch_cond}"])
+                        sub.walk(conditions + [branch_directive])
                         self.steps.extend(sub.steps)
                     i = body_end + 1
                     nl = self.text.find("\n", i)
@@ -757,13 +744,12 @@ class BodyWalker:
 
     @staticmethod
     def _split_pp_branches(
-        text: str, start: int, end: int, first_expr: str
+        text: str, start: int, end: int, first_directive: str
     ) -> list[tuple[int, int, str]]:
         branches = []
         cur = start
         depth = 0
-        seen_exprs = [first_expr]
-        current_expr = first_expr
+        current_directive = first_directive
         i = start
         while i < end:
             if text[i] != "#":
@@ -781,24 +767,19 @@ class BodyWalker:
                 depth += 1
             elif line.startswith("#endif"):
                 if depth == 0:
-                    branches.append((cur, i, current_expr))
+                    branches.append((cur, i, current_directive))
                     return branches
                 depth -= 1
             elif depth == 0 and line.startswith("#elif"):
-                branches.append((cur, i, current_expr))
-                elif_expr = BodyWalker._pp_expr(line)
-                negated = " && ".join(f"!({expr})" for expr in seen_exprs)
-                current_expr = (
-                    f"{negated} && ({elif_expr})" if negated else elif_expr
-                )
-                seen_exprs.append(elif_expr)
+                branches.append((cur, i, current_directive))
+                current_directive = line
                 cur = j + 1
             elif depth == 0 and line.startswith("#else"):
-                branches.append((cur, i, current_expr))
-                current_expr = " && ".join(f"!({expr})" for expr in seen_exprs)
+                branches.append((cur, i, current_directive))
+                current_directive = line
                 cur = j + 1
             i = j + 1
-        branches.append((cur, end, current_expr))
+        branches.append((cur, end, current_directive))
         return branches
 
     @staticmethod
@@ -857,9 +838,7 @@ def parse_cpp_file(path: Path) -> tuple[list[Builder], list[dict]]:
     for name, sig_start, body_open, body_close in fn_bodies:
         builder = Builder(name=name, file=str(path), line=line_of(text, sig_start))
         walker = BodyWalker(text, body_open + 1, body_close, helper_names - {name})
-        walker.walk(
-            conditions=[f"#if {cond}" for cond in preprocessor_conditions_at(text, sig_start)]
-        )
+        walker.walk(conditions=preprocessor_conditions_at(text, sig_start))
         builder.steps = walker.steps
         builders.append(builder)
 
@@ -902,9 +881,7 @@ def parse_cpp_file(path: Path) -> tuple[list[Builder], list[dict]]:
             continue
 
         walker = BodyWalker(text, reg["body_open"] + 1, reg["body_close"], helper_names)
-        walker.walk(
-            conditions=[f"#if {cond}" for cond in preprocessor_conditions_at(text, reg["line"])]
-        )
+        walker.walk(conditions=preprocessor_conditions_at(text, reg["line"]))
         pipelines.append(
             {
                 "name": reg["name"],
@@ -963,6 +940,7 @@ def main(argv: list[str]) -> int:
     pass_defs: list[PassDef] = []
     for td in (root / "include").rglob("Passes.td"):
         pass_defs.extend(parse_passes_td(td))
+    pass_defs.sort(key=lambda item: (item.td_file, item.td_line, item.flag, item.cls))
     print(f"[extract] passes defined: {len(pass_defs)}", file=sys.stderr)
 
     ctor_candidates: dict[str, list[tuple[Optional[str], str]]] = {}
@@ -994,6 +972,8 @@ def main(argv: list[str]) -> int:
             continue
         all_builders.extend(builders)
         all_pipelines.extend(pipelines)
+    all_builders.sort(key=lambda item: (item.file, item.line, item.name))
+    all_pipelines.sort(key=lambda item: (item["file"], item["line"], item["name"]))
     print(f"[extract] builders found: {len(all_builders)}", file=sys.stderr)
     print(f"[extract] pipeline registrations: {len(all_pipelines)}", file=sys.stderr)
 
