@@ -291,6 +291,59 @@ def test_extract_parses_add_nested_pass_calls(tmp_path: Path):
     assert step["flag"] == "demo-pass"
 
 
+def test_extract_recovers_constructor_from_wrapped_add_pass_local_variable(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    root = repo / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+    (root / "include" / "bishengir" / "Transforms").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "Demo").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Transforms" / "Passes.td").write_text(
+        'def DemoPass : Pass<"demo-pass", "mlir::ModuleOp"> { let constructor = "::mlir::createDemoPass()"; }'
+    )
+    (root / "lib" / "Dialect" / "Demo" / "Demo.cpp").write_text(
+        "void buildDemo(mlir::OpPassManager &pm) {\n"
+        "  auto demoPass = ::mlir::createDemoPass();\n"
+        "  pm.addPass(std::unique_ptr<mlir::Pass>(dyn_cast<mlir::Pass>(demoPass.release())));\n"
+        "}\n"
+    )
+
+    main(["extract.py", str(repo)])
+    skeleton = json.loads((repo / ".agent_pipelines" / "skeleton.json").read_text())
+
+    steps = skeleton["builders"][0]["steps"]
+    assert len(steps) == 1
+    assert steps[0]["kind"] == "pass"
+    assert steps[0]["constructor_fn"] == "createDemoPass"
+    assert steps[0]["flag"] == "demo-pass"
+
+
+def test_extract_recovers_constructor_from_inline_wrapped_add_pass(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    root = repo / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+    (root / "include" / "bishengir" / "Transforms").mkdir(parents=True)
+    (root / "lib" / "Dialect" / "Demo").mkdir(parents=True)
+    (root / "include" / "bishengir" / "Transforms" / "Passes.td").write_text(
+        'def DemoPass : Pass<"demo-pass", "mlir::ModuleOp"> { let constructor = "::mlir::createDemoPass()"; }'
+    )
+    (root / "lib" / "Dialect" / "Demo" / "Demo.cpp").write_text(
+        "void buildDemo(mlir::OpPassManager &pm) {\n"
+        "  pm.addPass(std::unique_ptr<mlir::Pass>(wrap(::mlir::createDemoPass())));\n"
+        "}\n"
+    )
+
+    main(["extract.py", str(repo)])
+    skeleton = json.loads((repo / ".agent_pipelines" / "skeleton.json").read_text())
+
+    steps = skeleton["builders"][0]["steps"]
+    assert len(steps) == 1
+    assert steps[0]["kind"] == "pass"
+    assert steps[0]["constructor_fn"] == "createDemoPass"
+    assert steps[0]["flag"] == "demo-pass"
+
+
 def test_extract_counts_referenced_pass_flags_with_duplicate_constructors(
     tmp_path: Path,
 ):

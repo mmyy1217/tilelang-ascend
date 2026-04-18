@@ -241,13 +241,11 @@ FUNC_DEF_RE = re.compile(
     """
 )
 
-PASS_CALL_RE = re.compile(
+ADD_PASS_CALL_RE = re.compile(
     r"""(?x)
     \b(?P<pm>pm|passManager)\b
     (?:\.nest<\s*(?P<nest>[^>]+?)\s*>\(\))?
     \.addPass\(\s*
-    (?:::)?(?:[\w:]+::)*?(?P<ctor>create\w+)
-    \s*\(
     """
 )
 
@@ -267,6 +265,13 @@ HELPER_CALL_RE = re.compile(
     \s*\(\s*
     (?P<arg0>[\w&]+)
     \s*[,)]
+    """
+)
+
+LOCAL_ASSIGN_RE = re.compile(
+    r"""(?x)
+    \b(?P<name>\w+)\b
+    \s*=\s*
     """
 )
 
@@ -500,12 +505,51 @@ def find_pipeline_registrations(text: str) -> list[dict]:
 
 
 class BodyWalker:
-    def __init__(self, text: str, start: int, end: int, helper_names: set[str]):
+    def __init__(
+        self,
+        text: str,
+        start: int,
+        end: int,
+        helper_names: set[str],
+        local_pass_ctors: Optional[dict[str, Optional[str]]] = None,
+    ):
         self.text = text
         self.start = start
         self.end = end
         self.helper_names = helper_names
+        self.local_pass_ctors = (
+            {} if local_pass_ctors is None else dict(local_pass_ctors)
+        )
         self.steps: list[Step] = []
+
+    def _find_constructor_fn(self, expr: str) -> Optional[str]:
+        ctor_match = CONSTRUCTOR_FN_RE.search(expr)
+        if ctor_match:
+            return ctor_match.group(1)
+
+        best_match: tuple[int, Optional[str]] | None = None
+        for name, constructor_fn in self.local_pass_ctors.items():
+            if not constructor_fn:
+                continue
+            var_match = re.search(rf"\b{re.escape(name)}\b", expr)
+            if not var_match:
+                continue
+            if best_match is None or var_match.start() < best_match[0]:
+                best_match = (var_match.start(), constructor_fn)
+        return best_match[1] if best_match else None
+
+    def _record_local_assignment(self, start: int) -> Optional[int]:
+        assign_match = LOCAL_ASSIGN_RE.match(self.text, start)
+        if not assign_match:
+            return None
+        stmt_end = self._stmt_end(self.text, assign_match.end(), self.end)
+        rhs = self.text[assign_match.end() : stmt_end]
+        constructor_fn = self._find_constructor_fn(rhs)
+        if constructor_fn:
+            self.local_pass_ctors[assign_match.group("name")] = constructor_fn
+        else:
+            self.local_pass_ctors.pop(assign_match.group("name"), None)
+        return stmt_end + 1
 
     @staticmethod
     def _balanced_paren(text: str, open_idx: int) -> int:
@@ -581,7 +625,13 @@ class BodyWalker:
                         self.text, body_start, body_end, line
                     )
                     for branch_start, branch_end, branch_directive in branches:
-                        sub = BodyWalker(self.text, branch_start, branch_end, self.helper_names)
+                        sub = BodyWalker(
+                            self.text,
+                            branch_start,
+                            branch_end,
+                            self.helper_names,
+                            self.local_pass_ctors,
+                        )
                         sub.walk(conditions + [branch_directive])
                         self.steps.extend(sub.steps)
                     i = body_end + 1
@@ -592,6 +642,11 @@ class BodyWalker:
                 continue
             if self.text.startswith("if", i) and (i + 2 < self.end) and self.text[i + 2] in " \t\n(":
                 i = self._walk_if_chain(i, conditions)
+                continue
+
+            assign_end = self._record_local_assignment(i)
+            if assign_end is not None:
+                i = assign_end
                 continue
 
             nested_pass_match = NESTED_PASS_CALL_RE.match(self.text, i)
@@ -610,20 +665,29 @@ class BodyWalker:
                 i = cl + 1 if cl > 0 else nested_pass_match.end()
                 continue
 
-            pass_match = PASS_CALL_RE.match(self.text, i)
-            if pass_match:
+            add_pass_match = ADD_PASS_CALL_RE.match(self.text, i)
+            if add_pass_match:
+                call_open = self.text.rfind("(", add_pass_match.start(), add_pass_match.end())
+                call_close = self._balanced_paren(self.text, call_open) if call_open >= 0 else -1
+                constructor_fn = None
+                if call_close > call_open:
+                    constructor_fn = self._find_constructor_fn(
+                        self.text[call_open + 1 : call_close]
+                    )
                 self.steps.append(
                     Step(
-                        kind="nested_pass" if pass_match.group("nest") else "pass",
+                        kind="nested_pass" if add_pass_match.group("nest") else "pass",
                         conditions=list(conditions),
-                        line=line_of(self.text, pass_match.start()),
-                        constructor_fn=pass_match.group("ctor"),
-                        nested_op=pass_match.group("nest").strip() if pass_match.group("nest") else None,
+                        line=line_of(self.text, add_pass_match.start()),
+                        constructor_fn=constructor_fn,
+                        nested_op=(
+                            add_pass_match.group("nest").strip()
+                            if add_pass_match.group("nest")
+                            else None
+                        ),
                     )
                 )
-                op = self.text.find("(", pass_match.end() - 1)
-                cl = self._balanced_paren(self.text, op) if op >= 0 else -1
-                i = cl + 1 if cl > 0 else pass_match.end()
+                i = call_close + 1 if call_close > 0 else add_pass_match.end()
                 continue
 
             run_match = RUN_PIPELINE_RE.match(self.text, i)
@@ -713,13 +777,25 @@ class BodyWalker:
             k += 1
         if k < self.end and self.text[k] == "{":
             body_close = self._matched_brace(self.text, k)
-            sub = BodyWalker(self.text, k + 1, body_close, self.helper_names)
+            sub = BodyWalker(
+                self.text,
+                k + 1,
+                body_close,
+                self.helper_names,
+                self.local_pass_ctors,
+            )
             sub.walk(conditions + [cond])
             self.steps.extend(sub.steps)
             next_i = body_close + 1
         else:
             stmt_end = self._stmt_end(self.text, k, self.end)
-            sub = BodyWalker(self.text, k, stmt_end, self.helper_names)
+            sub = BodyWalker(
+                self.text,
+                k,
+                stmt_end,
+                self.helper_names,
+                self.local_pass_ctors,
+            )
             sub.walk(conditions + [cond])
             self.steps.extend(sub.steps)
             next_i = stmt_end + 1
@@ -733,14 +809,26 @@ class BodyWalker:
                 k2 += 1
             if k2 < self.end and self.text[k2] == "{":
                 body_close = self._matched_brace(self.text, k2)
-                sub = BodyWalker(self.text, k2 + 1, body_close, self.helper_names)
+                sub = BodyWalker(
+                    self.text,
+                    k2 + 1,
+                    body_close,
+                    self.helper_names,
+                    self.local_pass_ctors,
+                )
                 sub.walk(conditions + [f"!({cond})"])
                 self.steps.extend(sub.steps)
                 return body_close + 1
             if self.text.startswith("if", k2):
                 return self._walk_if_chain(k2, conditions + [f"!({cond})"])
             stmt_end = self._stmt_end(self.text, k2, self.end)
-            sub = BodyWalker(self.text, k2, stmt_end, self.helper_names)
+            sub = BodyWalker(
+                self.text,
+                k2,
+                stmt_end,
+                self.helper_names,
+                self.local_pass_ctors,
+            )
             sub.walk(conditions + [f"!({cond})"])
             self.steps.extend(sub.steps)
             return stmt_end + 1
