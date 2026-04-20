@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -68,6 +69,13 @@ def render_pipeline_page(out_root: Path, payload: dict) -> None:
 
 
 def build_site(site_root: Path) -> None:
+    template_root = Path(__file__).resolve().parent / "site_template"
+    docs_root = template_root / "docs"
+
+    site_root.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(template_root / "package.json", site_root / "package.json")
+    shutil.copytree(docs_root, site_root, dirs_exist_ok=True)
+
     subprocess.run(["npm", "install"], cwd=site_root, check=True)
     subprocess.run(["npm", "run", "build"], cwd=site_root, check=True)
     subprocess.run(["npm", "run", "pagefind"], cwd=site_root, check=True)
