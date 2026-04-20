@@ -2,8 +2,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vitepress build docs",
-    "pagefind": "pagefind --site docs/.vitepress/dist"
+    "build": "vitepress build .",
+    "pagefind": "pagefind --site .vitepress/dist"
   },
   "devDependencies": {
     "pagefind": "^1.1.0",
