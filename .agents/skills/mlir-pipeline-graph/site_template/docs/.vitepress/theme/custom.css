@@ -1,0 +1,10 @@
+:root {
+  --vp-c-brand-1: #0f766e;
+  --vp-c-brand-2: #115e59;
+  --vp-c-brand-3: #134e4a;
+}
+
+.VPNavBarTitle,
+.VPHero .name {
+  letter-spacing: -0.02em;
+}

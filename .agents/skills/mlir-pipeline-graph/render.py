@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from graphviz_utils import pipeline_dot
@@ -64,3 +65,9 @@ def render_pipeline_page(out_root: Path, payload: dict) -> None:
         )
 
     md_path.write_text("\n".join(lines).rstrip() + "\n")
+
+
+def build_site(site_root: Path) -> None:
+    subprocess.run(["npm", "install"], cwd=site_root, check=True)
+    subprocess.run(["npm", "run", "build"], cwd=site_root, check=True)
+    subprocess.run(["npm", "run", "pagefind"], cwd=site_root, check=True)
