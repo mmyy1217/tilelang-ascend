@@ -56,11 +56,15 @@ def _load_latest_file_index(repo: Path) -> dict[str, dict[str, list[str]]]:
     return json.loads(index_path.read_text())
 
 
-def _write_diff_report(repo: Path, command: str) -> None:
+def _write_diff_report(repo: Path, command: str, *git_args: str) -> None:
     try:
-        changed_files_text = git_output(repo, "diff", "--name-only")
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        changed_files_text = ""
+        changed_files_text = git_output(repo, *git_args)
+    except subprocess.CalledProcessError as exc:
+        error_text = f"{exc.stderr or ''}\n{exc.stdout or ''}".lower()
+        if "not a git repository" in error_text:
+            changed_files_text = ""
+        else:
+            raise
     changed_files = [line for line in changed_files_text.splitlines() if line]
     file_index = _load_latest_file_index(repo)
     mapped = map_changed_files_to_objects(changed_files, file_index)
@@ -84,7 +88,23 @@ def main(argv: list[str] | None = None) -> int:
         repo = Path(args.repo).resolve()
         if not repo.is_dir():
             return 1
-        _write_diff_report(repo, args.command)
+        try:
+            if args.command == "update":
+                _write_diff_report(repo, args.command, "diff", "--name-only")
+            elif args.command == "commit":
+                _write_diff_report(
+                    repo,
+                    args.command,
+                    "show",
+                    "--pretty=",
+                    "--name-only",
+                    args.ref,
+                )
+            else:
+                selector = args.id if args.id is not None else args.url
+                _write_diff_report(repo, args.command, "diff", "--name-only", selector)
+        except subprocess.CalledProcessError:
+            return 1
         return 0
 
     if args.command != "full":
