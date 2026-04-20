@@ -27,8 +27,13 @@ def build_parser() -> argparse.ArgumentParser:
             pr_selector = command_parser.add_mutually_exclusive_group(required=True)
             pr_selector.add_argument("--id")
             pr_selector.add_argument("--url")
-        command_parser.add_argument("--name")
-        command_parser.add_argument("--flag")
+        elif command in {"pipeline", "dialect", "op"}:
+            command_parser.add_argument("--name", required=True)
+        elif command == "pass":
+            command_parser.add_argument("--flag", required=True)
+        else:
+            command_parser.add_argument("--name")
+            command_parser.add_argument("--flag")
 
     return parser
 
@@ -39,10 +44,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         args = parser.parse_args(args_list)
-        if args.command == "pass" and not args.flag:
-            parser.error("--flag is required for pass")
     except SystemExit as exc:
         return int(exc.code)
+
+    if args.command != "full":
+        return 0
 
     repo = Path(args.repo).resolve()
     repo.mkdir(parents=True, exist_ok=True)

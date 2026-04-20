@@ -51,7 +51,11 @@ def test_documented_cli_forms_are_accepted(
     exit_code = main(argv)
 
     assert exit_code == 0
-    assert (repo / ".agent_pipelines" / "cache" / "latest" / "manifest.json").exists()
+    manifest = repo / ".agent_pipelines" / "cache" / "latest" / "manifest.json"
+    if argv[1] == "full":
+        assert manifest.exists()
+    else:
+        assert not manifest.exists()
 
 
 def test_full_command_builds_latest_manifest(tmp_path: Path) -> None:
@@ -62,6 +66,43 @@ def test_full_command_builds_latest_manifest(tmp_path: Path) -> None:
 
     assert exit_code == 0
     assert (repo / ".agent_pipelines" / "cache" / "latest" / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("command", ["pipeline", "dialect", "op"])
+def test_pipeline_family_commands_require_name(tmp_path: Path, command: str) -> None:
+    repo = tmp_path / f"repo_{command}"
+    repo.mkdir()
+
+    exit_code = main(["analyze.py", command, "--repo", str(repo)])
+
+    assert exit_code == 2
+
+
+@pytest.mark.parametrize(
+    ("argv", "command"),
+    [
+        (["analyze.py", "pipeline", "--repo", "{repo}", "--name", "sample"], "pipeline"),
+        (["analyze.py", "dialect", "--repo", "{repo}", "--name", "sample"], "dialect"),
+        (["analyze.py", "op", "--repo", "{repo}", "--name", "sample"], "op"),
+        (["analyze.py", "pass", "--repo", "{repo}", "--flag", "sample"], "pass"),
+        (["analyze.py", "update", "--repo", "{repo}"], "update"),
+        (["analyze.py", "commit", "--repo", "{repo}", "--ref", "HEAD"], "commit"),
+        (["analyze.py", "pr", "--repo", "{repo}", "--id", "123"], "pr"),
+    ],
+)
+def test_non_full_commands_preserve_existing_latest_cache(
+    tmp_path: Path, argv: list[str], command: str
+) -> None:
+    repo = tmp_path / f"repo_{command}"
+    keep = repo / ".agent_pipelines" / "cache" / "latest" / "research" / "keep.json"
+    keep.parent.mkdir(parents=True)
+    keep.write_text("keep")
+
+    exit_code = main([part.format(repo=str(repo)) for part in argv])
+
+    assert exit_code == 0
+    assert keep.read_text() == "keep"
+    assert not (repo / ".agent_pipelines" / "cache" / "latest" / "manifest.json").exists()
 
 
 def test_pass_command_requires_flag(tmp_path: Path) -> None:
