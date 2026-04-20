@@ -88,8 +88,9 @@ def render_op_page(out_root: Path, payload: dict) -> None:
     ]
 
     for item in payload.get("nodes", []):
+        pass_name = item.get("pass", item.get("pass_name", ""))
         lines.append(
-            f"- `{item['pipeline']}` / `{item['pass']}` / `{item['state']}` / `{item['evidence_type']}`"
+            f"- `{item['pipeline']}` / `{pass_name}` / `{item['state']}` / `{item['evidence_type']}`"
         )
 
     md_path.write_text("\n".join(lines).rstrip() + "\n")

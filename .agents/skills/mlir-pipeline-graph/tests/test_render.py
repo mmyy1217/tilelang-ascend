@@ -1,6 +1,8 @@
 import json
+from dataclasses import asdict
 from pathlib import Path
 
+from models import OpLoweringNode, OpLoweringPage
 from render import build_site, render_dialect_page, render_op_page, render_pipeline_page
 
 
@@ -209,6 +211,31 @@ def test_render_op_page_writes_lowering_chain(tmp_path: Path):
     assert "legalize-hivm-pipeline" in dot
     assert "node_1 -> node_2" in dot
     assert 'URL="../pipelines/convert-to-hivm-pipeline.html"' in dot
+
+
+def test_render_op_page_accepts_dataclass_serialized_payload(tmp_path: Path):
+    out_root = tmp_path / ".agent_pipelines"
+    payload = asdict(
+        OpLoweringPage(
+            op="hfusion.matmul",
+            dialect="hfusion",
+            nodes=[
+                OpLoweringNode(
+                    pipeline="convert-to-hivm-pipeline",
+                    pass_name="convert-hfusion-to-hivm",
+                    state="rewritten",
+                    evidence_type="implementation",
+                )
+            ],
+        )
+    )
+
+    render_op_page(out_root, payload)
+
+    md_path = out_root / "reports" / "site_src" / "ops" / "hfusion.matmul.md"
+    md = md_path.read_text()
+
+    assert "- `convert-to-hivm-pipeline` / `convert-hfusion-to-hivm` / `rewritten` / `implementation`" in md
 
 
 def test_render_dialect_page_writes_aggregate_index(tmp_path: Path):

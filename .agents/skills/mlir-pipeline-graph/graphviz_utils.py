@@ -31,11 +31,12 @@ def op_dot(payload: dict) -> str:
 
     for index, item in enumerate(payload.get("nodes", []), start=1):
         node_name = f"node_{index}"
+        pass_name = item.get("pass", item.get("pass_name", ""))
         label = _dot_escape(
             "\n".join(
                 [
                     str(item["pipeline"]),
-                    str(item["pass"]),
+                    str(pass_name),
                     str(item["state"]),
                     str(item["evidence_type"]),
                 ]
