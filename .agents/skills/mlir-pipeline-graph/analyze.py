@@ -12,14 +12,23 @@ COMMANDS = ["full", "pipeline", "pass", "dialect", "op", "update", "commit", "pr
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="analyze.py")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--repo", default=".")
+    common.add_argument("--snapshot", default=None)
+    common.add_argument("--from-cache-only", action="store_true")
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     for command in COMMANDS:
-        command_parser = subparsers.add_parser(command)
-        command_parser.add_argument("--repo", default=".")
+        command_parser = subparsers.add_parser(command, parents=[common])
+        if command == "commit":
+            command_parser.add_argument("--ref", required=True)
+        elif command == "pr":
+            pr_selector = command_parser.add_mutually_exclusive_group(required=True)
+            pr_selector.add_argument("--id")
+            pr_selector.add_argument("--url")
         command_parser.add_argument("--name")
         command_parser.add_argument("--flag")
-        command_parser.add_argument("--from-cache-only", action="store_true")
 
     return parser
 
