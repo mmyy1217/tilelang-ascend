@@ -147,13 +147,15 @@ def test_promote_pipeline_research_rejects_pass_without_example_or_fallback(
     ],
 )
 def test_documented_cli_forms_are_accepted(
-    tmp_path: Path, argv: list[str], expected_repo_subdir: str
+    monkeypatch, tmp_path: Path, argv: list[str], expected_repo_subdir: str
 ) -> None:
     repo = tmp_path / expected_repo_subdir
     repo.mkdir()
 
     argv = argv.copy()
     argv[2:2] = ["--repo", str(repo)]
+    if argv[1] in {"commit", "pr"}:
+        monkeypatch.setattr("analyze.git_output", lambda repo_path, *args: "", raising=False)
 
     exit_code = main(argv)
 
@@ -218,12 +220,14 @@ def test_pipeline_family_commands_require_name(tmp_path: Path, command: str) -> 
     ],
 )
 def test_non_full_commands_preserve_existing_latest_cache(
-    tmp_path: Path, argv: list[str], command: str
+    monkeypatch, tmp_path: Path, argv: list[str], command: str
 ) -> None:
     repo = tmp_path / f"repo_{command}"
     keep = repo / ".agent_pipelines" / "cache" / "latest" / "research" / "keep.json"
     keep.parent.mkdir(parents=True)
     keep.write_text("keep")
+    if argv[1] in {"update", "commit", "pr"}:
+        monkeypatch.setattr("analyze.git_output", lambda repo_path, *args: "", raising=False)
 
     exit_code = main([part.format(repo=str(repo)) for part in argv])
 
@@ -241,10 +245,11 @@ def test_non_full_commands_preserve_existing_latest_cache(
     ],
 )
 def test_update_commit_and_pr_create_latest_diffs_dir(
-    tmp_path: Path, argv: list[str]
+    monkeypatch, tmp_path: Path, argv: list[str]
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
+    monkeypatch.setattr("analyze.git_output", lambda repo_path, *args: "", raising=False)
 
     exit_code = main([part.format(repo=str(repo)) for part in argv])
 
@@ -252,7 +257,170 @@ def test_update_commit_and_pr_create_latest_diffs_dir(
     assert (repo / ".agent_pipelines" / "cache" / "latest" / "diffs").is_dir()
 
 
+@pytest.mark.parametrize(
+    ("argv", "report_name"),
+    [
+        (["analyze.py", "update", "--repo", "{repo}"], "update.json"),
+        (["analyze.py", "commit", "--repo", "{repo}", "--ref", "HEAD"], "commit.json"),
+        (["analyze.py", "pr", "--repo", "{repo}", "--id", "123"], "pr.json"),
+    ],
+)
+def test_update_commit_and_pr_write_diff_report(
+    monkeypatch, tmp_path: Path, argv: list[str], report_name: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    fixture = json.loads(
+        (
+            Path(".agents/skills/mlir-pipeline-graph/tests/fixtures/sample_diff.json")
+        ).read_text()
+    )
+    index_path = repo / ".agent_pipelines" / "cache" / "latest" / "index" / "files.json"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(json.dumps(fixture["file_index"]))
+
+    monkeypatch.setattr(
+        "analyze.git_output",
+        lambda repo_path, *args: "\n".join(fixture["changed_files"]),
+        raising=False,
+    )
+
+    exit_code = main([part.format(repo=str(repo)) for part in argv])
+
+    assert exit_code == 0
+    report = json.loads(
+        (
+            repo / ".agent_pipelines" / "cache" / "latest" / "diffs" / report_name
+        ).read_text()
+    )
+    assert report["changed_files"] == fixture["changed_files"]
+    assert report["pipelines"] == ["convert-to-hivm-pipeline"]
+    assert report["ops"] == ["hfusion.matmul"]
+    assert sorted(report["dialects"]) == ["hfusion", "hivm"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["analyze.py", "update", "--repo", "{repo}"],
+        ["analyze.py", "commit", "--repo", "{repo}", "--ref", "HEAD"],
+        ["analyze.py", "pr", "--repo", "{repo}", "--id", "123"],
+    ],
+)
+def test_update_commit_and_pr_reject_nonexistent_repo(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    repo = tmp_path / "missing-repo"
+
+    exit_code = main([part.format(repo=str(repo)) for part in argv])
+
+    assert exit_code != 0
+    assert not (repo / ".agent_pipelines").exists()
+
+
+def test_commit_command_passes_ref_to_git_output(monkeypatch, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    calls = []
+
+    def fake_git_output(repo_path, *args):
+        calls.append((repo_path, args))
+        return ""
+
+    monkeypatch.setattr("analyze.git_output", fake_git_output, raising=False)
+
+    exit_code = main(["analyze.py", "commit", "--repo", str(repo), "--ref", "HEAD~3"])
+
+    assert exit_code == 0
+    assert calls == [(repo.resolve(), ("show", "--pretty=", "--name-only", "HEAD~3"))]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_selector"),
+    [
+        (["analyze.py", "pr", "--repo", "{repo}", "--id", "123"], "refs/pull/123/head"),
+        (
+            ["analyze.py", "pr", "--repo", "{repo}", "--url", "https://example.com/pr/123"],
+            "refs/pull/123/head",
+        ),
+    ],
+)
+def test_pr_command_passes_selector_to_git_output(
+    monkeypatch, tmp_path: Path, argv: list[str], expected_selector: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    calls = []
+
+    def fake_git_output(repo_path, *args):
+        calls.append((repo_path, args))
+        return ""
+
+    monkeypatch.setattr("analyze.git_output", fake_git_output, raising=False)
+
+    rendered = [part.format(repo=str(repo)) for part in argv]
+
+    exit_code = main(rendered)
+
+    assert exit_code == 0
+    assert calls == [(repo.resolve(), ("diff", "--name-only", expected_selector))]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["analyze.py", "update", "--repo", "{repo}"],
+        ["analyze.py", "commit", "--repo", "{repo}", "--ref", "HEAD"],
+        ["analyze.py", "pr", "--repo", "{repo}", "--id", "123"],
+    ],
+)
+def test_update_commit_and_pr_fail_on_git_errors(
+    monkeypatch, tmp_path: Path, argv: list[str]
+) -> None:
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def fake_git_output(repo_path, *args):
+        raise subprocess.CalledProcessError(returncode=128, cmd=["git", *args])
+
+    monkeypatch.setattr("analyze.git_output", fake_git_output, raising=False)
+
+    exit_code = main([part.format(repo=str(repo)) for part in argv])
+
+    assert exit_code != 0
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["analyze.py", "update", "--repo", "{repo}"],
+        ["analyze.py", "commit", "--repo", "{repo}", "--ref", "HEAD"],
+        ["analyze.py", "pr", "--repo", "{repo}", "--id", "123"],
+    ],
+)
+def test_update_commit_and_pr_reject_plain_non_git_repo(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    exit_code = main([part.format(repo=str(repo)) for part in argv])
+
+    assert exit_code != 0
+
+
 def test_pass_command_requires_flag(tmp_path: Path) -> None:
     exit_code = main(["analyze.py", "pass", "--repo", str(tmp_path)])
 
     assert exit_code == 2
+
+
+def test_skill_mentions_html_first_and_required_examples() -> None:
+    text = Path(".agents/skills/mlir-pipeline-graph/SKILL.md").read_text()
+
+    assert "HTML-first" in text
+    assert "example_missing_reason" in text
+    assert "analyze.py" in text
