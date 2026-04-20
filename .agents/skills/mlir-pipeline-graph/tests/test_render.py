@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from render import render_pipeline_page
+from render import build_site, render_pipeline_page
 
 
 def test_render_pipeline_page_writes_markdown_and_dot(tmp_path: Path):
@@ -100,3 +100,33 @@ def test_render_pipeline_page_renders_explicit_fallback_payload(tmp_path: Path):
     assert "Observed in downstream pipeline trace" in md
     assert "Test path:" not in md
     assert "```mlir" not in md
+
+
+def test_site_template_contains_vitepress_and_pagefind():
+    package_json = Path(
+        ".agents/skills/mlir-pipeline-graph/site_template/package.json"
+    ).read_text()
+    config_mts = Path(
+        ".agents/skills/mlir-pipeline-graph/site_template/docs/.vitepress/config.mts"
+    ).read_text()
+
+    assert '"vitepress"' in package_json
+    assert '"pagefind"' in package_json
+    assert 'provider: "local"' in config_mts
+
+
+def test_build_site_invokes_npm_install_build_and_pagefind(monkeypatch, tmp_path: Path):
+    calls = []
+
+    def fake_run(cmd, cwd, check):
+        calls.append((cmd, Path(cwd), check))
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    build_site(tmp_path)
+
+    assert calls == [
+        (["npm", "install"], tmp_path, True),
+        (["npm", "run", "build"], tmp_path, True),
+        (["npm", "run", "pagefind"], tmp_path, True),
+    ]
