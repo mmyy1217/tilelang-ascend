@@ -104,6 +104,39 @@ def test_promote_pipeline_research_promotes_explicit_fallback_payload(
     assert promoted["passes"][0]["example_missing_reason"] == "No standalone regression test is available yet."
 
 
+def test_promote_pipeline_research_rejects_pass_without_example_or_fallback(
+    tmp_path: Path,
+) -> None:
+    from analyze import promote_pipeline_research
+    from validators import ValidationError
+
+    staged = tmp_path / "_staging" / "research" / "pipeline.json"
+    target = tmp_path / "cache" / "latest" / "research" / "pipeline.json"
+    staged.parent.mkdir(parents=True)
+    staged.write_text(
+        json.dumps(
+            {
+                "pipeline": "convert-to-hivm-pipeline",
+                "passes": [
+                    {
+                        "flag": "annotation-lowering",
+                        "summary": "Erase annotation.mark ops.",
+                        "key_options": [],
+                        "dialects_touched": ["annotation"],
+                    }
+                ],
+                "helpers": [],
+            }
+        )
+    )
+
+    with pytest.raises(ValidationError) as excinfo:
+        promote_pipeline_research(staged, target)
+
+    assert "example" in str(excinfo.value)
+    assert not target.exists()
+
+
 @pytest.mark.parametrize(
     ("argv", "expected_repo_subdir"),
     [
