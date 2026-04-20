@@ -54,3 +54,20 @@ def validate_pass_research(payload: dict) -> dict:
             raise ValidationError("fallback_evidence must be meaningful")
 
     return payload
+
+
+def validate_pipeline_research(payload: dict) -> dict:
+    require_keys(payload, ["pipeline", "passes", "helpers"])
+
+    passes = payload["passes"]
+    if not isinstance(passes, list):
+        raise ValidationError("passes must be a list")
+    if not isinstance(payload["helpers"], list):
+        raise ValidationError("helpers must be a list")
+
+    for index, pass_payload in enumerate(passes):
+        if not isinstance(pass_payload, Mapping):
+            raise ValidationError(f"pass entry {index} must be a mapping")
+        validate_pass_research(pass_payload)
+
+    return payload

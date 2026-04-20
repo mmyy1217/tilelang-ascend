@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from cache import initialize_latest_snapshot
+from validators import validate_pipeline_research
 
 
 COMMANDS = ["full", "pipeline", "pass", "dialect", "op", "update", "commit", "pr"]
@@ -33,6 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
             command_parser.add_argument("--flag", required=True)
 
     return parser
+
+
+def promote_pipeline_research(staged: Path, target: Path) -> None:
+    payload = json.loads(staged.read_text())
+    validated = validate_pipeline_research(payload)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(validated, indent=2, sort_keys=True) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:

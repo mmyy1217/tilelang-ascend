@@ -73,3 +73,19 @@ def test_validate_pass_research_rejects_placeholder_fallback():
         assert "meaningful" in str(exc)
     else:
         raise AssertionError("expected ValidationError")
+
+
+def test_validate_pipeline_research_rejects_missing_helpers_key():
+    from validators import validate_pipeline_research
+
+    record = {
+        "pipeline": "convert-to-hivm-pipeline",
+        "passes": [],
+    }
+
+    try:
+        validate_pipeline_research(record)
+    except ValidationError as exc:
+        assert "helpers" in str(exc)
+    else:
+        raise AssertionError("expected ValidationError")
