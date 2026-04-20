@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from graphviz_utils import pipeline_dot
@@ -24,7 +25,7 @@ def render_pipeline_page(out_root: Path, payload: dict) -> None:
 
     for item in payload.get("passes", []):
         flag = item["flag"]
-        example = item.get("example") or {}
+        example = item.get("example")
         lines.extend(
             [
                 f"- `{flag}`: {item['summary']}",
@@ -33,6 +34,26 @@ def render_pipeline_page(out_root: Path, payload: dict) -> None:
                 "",
                 item["summary"],
                 "",
+            ]
+        )
+
+        if example is None:
+            lines.extend(
+                [
+                    f"Example missing reason: {item.get('example_missing_reason', '')}",
+                    "",
+                    "Fallback evidence:",
+                    "",
+                    "```json",
+                    json.dumps(item.get("fallback_evidence", {}), indent=2, sort_keys=True),
+                    "```",
+                    "",
+                ]
+            )
+            continue
+
+        lines.extend(
+            [
                 f"Test path: `{example.get('test_path', '')}`",
                 "",
                 "```mlir",

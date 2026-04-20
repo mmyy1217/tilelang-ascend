@@ -63,4 +63,40 @@ def test_render_pipeline_page_writes_markdown_and_dot(tmp_path: Path):
     assert "func.func @main() { return }" in md
     assert "convert-to-hivm-op" in dot
     assert "legalize-hivm" in dot
+    assert "pass_1 -> pass_2" in dot
     assert 'URL="../pass-context/convert-to-hivm-op.html"' in dot
+
+
+def test_render_pipeline_page_renders_explicit_fallback_payload(tmp_path: Path):
+    out_root = tmp_path / ".agent_pipelines"
+    pipeline = {
+        "pipeline": "convert-to-hivm-pipeline",
+        "passes": [
+            {
+                "flag": "annotation-lowering",
+                "summary": "Erase annotation.mark ops.",
+                "key_options": [],
+                "dialects_touched": ["annotation"],
+                "example": None,
+                "example_missing_reason": "No standalone regression test is available yet.",
+                "fallback_evidence": {
+                    "notes": ["Observed in downstream pipeline trace"],
+                },
+            }
+        ],
+        "helpers": [],
+    }
+
+    render_pipeline_page(out_root, pipeline)
+
+    md_path = (
+        out_root / "reports" / "site_src" / "pipelines" / "convert-to-hivm-pipeline.md"
+    )
+
+    md = md_path.read_text()
+
+    assert "Example missing reason: No standalone regression test is available yet." in md
+    assert "Fallback evidence:" in md
+    assert "Observed in downstream pipeline trace" in md
+    assert "Test path:" not in md
+    assert "```mlir" not in md
