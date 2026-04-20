@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -20,6 +20,34 @@ class PassExample:
     output_ir: str
     check_lines: list[str]
     evidence_type: str
+
+
+@dataclass
+class OpLoweringNode:
+    pipeline: str
+    pass_name: str
+    state: str
+    evidence_type: str
+
+
+@dataclass
+class OpLoweringPage:
+    op: str
+    dialect: str
+    nodes: list[OpLoweringNode] = field(default_factory=list)
+
+
+@dataclass
+class DialectOpSummary:
+    op: str
+    summary: str
+
+
+@dataclass
+class DialectAggregatePage:
+    dialect: str
+    ops: list[DialectOpSummary] = field(default_factory=list)
+    pipelines: list[str] = field(default_factory=list)
 
 
 def require_keys(payload: dict[str, Any], keys: list[str]) -> None:

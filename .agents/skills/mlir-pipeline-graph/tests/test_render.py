@@ -1,6 +1,7 @@
+import json
 from pathlib import Path
 
-from render import build_site, render_pipeline_page
+from render import build_site, render_dialect_page, render_op_page, render_pipeline_page
 
 
 def test_render_pipeline_page_writes_markdown_and_dot(tmp_path: Path):
@@ -115,6 +116,27 @@ def test_site_template_contains_vitepress_and_pagefind():
     assert 'provider: "local"' in config_mts
 
 
+def test_site_template_builds_generated_site_src_root():
+    package_json = Path(
+        ".agents/skills/mlir-pipeline-graph/site_template/package.json"
+    ).read_text()
+    config_mts = Path(
+        ".agents/skills/mlir-pipeline-graph/site_template/docs/.vitepress/config.mts"
+    ).read_text()
+
+    assert '"build": "vitepress build ."' in package_json
+    assert '"pagefind": "pagefind --site .vitepress/dist"' in package_json
+    assert 'srcDir: "."' in config_mts
+
+
+def test_site_template_theme_imports_custom_css():
+    theme_index = Path(
+        ".agents/skills/mlir-pipeline-graph/site_template/docs/.vitepress/theme/index.ts"
+    ).read_text()
+
+    assert 'import "./custom.css"' in theme_index
+
+
 def test_build_site_invokes_npm_install_build_and_pagefind(monkeypatch, tmp_path: Path):
     calls = []
 
@@ -130,3 +152,89 @@ def test_build_site_invokes_npm_install_build_and_pagefind(monkeypatch, tmp_path
         (["npm", "run", "build"], tmp_path, True),
         (["npm", "run", "pagefind"], tmp_path, True),
     ]
+
+
+def test_build_site_materializes_vitepress_template(monkeypatch, tmp_path: Path):
+    def fake_run(cmd, cwd, check):
+        return None
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    build_site(tmp_path)
+
+    assert (tmp_path / "package.json").exists()
+    assert (tmp_path / ".vitepress" / "config.mts").exists()
+    assert (tmp_path / ".vitepress" / "theme" / "custom.css").exists()
+    assert (tmp_path / ".vitepress" / "theme" / "index.ts").exists()
+    assert (tmp_path / "index.md").exists()
+
+
+def test_build_site_preserves_existing_generated_index(monkeypatch, tmp_path: Path):
+    def fake_run(cmd, cwd, check):
+        return None
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    index_path = tmp_path / "index.md"
+    index_path.write_text("# Generated Home\n")
+
+    build_site(tmp_path)
+
+    assert index_path.read_text() == "# Generated Home\n"
+
+
+def test_render_op_page_writes_lowering_chain(tmp_path: Path):
+    out_root = tmp_path / ".agent_pipelines"
+    payload = json.loads(
+        Path(
+            ".agents/skills/mlir-pipeline-graph/tests/fixtures/sample_op_research.json"
+        ).read_text()
+    )
+
+    render_op_page(out_root, payload)
+
+    md_path = out_root / "reports" / "site_src" / "ops" / "hfusion.matmul.md"
+    dot_path = out_root / "reports" / "site_src" / "public" / "graphs" / "hfusion.matmul.dot"
+
+    assert md_path.exists()
+    assert dot_path.exists()
+
+    md = md_path.read_text()
+    dot = dot_path.read_text()
+
+    assert "# hfusion.matmul" in md
+    assert "Dialect: `hfusion`" in md
+    assert "- `convert-to-hivm-pipeline` / `convert-hfusion-to-hivm` / `rewritten` / `implementation`" in md
+    assert "- `legalize-hivm-pipeline` / `legalize-hivm` / `lowered` / `test`" in md
+    assert "convert-to-hivm-pipeline" in dot
+    assert "legalize-hivm-pipeline" in dot
+    assert "node_1 -> node_2" in dot
+    assert 'URL="../pipelines/convert-to-hivm-pipeline.html"' in dot
+
+
+def test_render_dialect_page_writes_aggregate_index(tmp_path: Path):
+    out_root = tmp_path / ".agent_pipelines"
+    payload = {
+        "dialect": "hfusion",
+        "ops": [
+            {
+                "op": "hfusion.matmul",
+                "summary": "Lowered through hivm legalization.",
+            },
+            {
+                "op": "hfusion.reduce",
+                "summary": "Lowered through reduction decomposition.",
+            },
+        ],
+        "pipelines": ["convert-to-hivm-pipeline", "legalize-hivm-pipeline"],
+    }
+
+    render_dialect_page(out_root, payload)
+
+    md_path = out_root / "reports" / "site_src" / "dialects" / "hfusion.md"
+    md = md_path.read_text()
+
+    assert "# hfusion" in md
+    assert "- `hfusion.matmul`: Lowered through hivm legalization." in md
+    assert "- `hfusion.reduce`: Lowered through reduction decomposition." in md
+    assert "- `convert-to-hivm-pipeline`" in md
+    assert "- `legalize-hivm-pipeline`" in md
