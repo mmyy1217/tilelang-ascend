@@ -1,0 +1,18 @@
+{
+  "dialect": "hfusion",
+  "nodes": [
+    {
+      "evidence_type": "implementation",
+      "pass": "convert-hfusion-to-hivm",
+      "pipeline": "convert-to-hivm-pipeline",
+      "state": "rewritten"
+    },
+    {
+      "evidence_type": "test",
+      "pass": "legalize-hivm",
+      "pipeline": "legalize-hivm-pipeline",
+      "state": "lowered"
+    }
+  ],
+  "op": "hfusion.matmul"
+}

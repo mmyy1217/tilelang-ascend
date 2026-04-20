@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from graphviz_utils import pipeline_dot
+from graphviz_utils import op_dot, pipeline_dot
 
 
 def render_pipeline_page(out_root: Path, payload: dict) -> None:
@@ -64,6 +64,56 @@ def render_pipeline_page(out_root: Path, payload: dict) -> None:
                 "",
             ]
         )
+
+    md_path.write_text("\n".join(lines).rstrip() + "\n")
+
+
+def render_op_page(out_root: Path, payload: dict) -> None:
+    site_src = out_root / "reports" / "site_src"
+    md_path = site_src / "ops" / f"{payload['op']}.md"
+    dot_path = site_src / "public" / "graphs" / f"{payload['op']}.dot"
+
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    dot_path.parent.mkdir(parents=True, exist_ok=True)
+
+    dot_path.write_text(op_dot(payload))
+
+    lines = [
+        f"# {payload['op']}",
+        "",
+        f"Dialect: `{payload['dialect']}`",
+        "",
+        "## Nodes",
+        "",
+    ]
+
+    for item in payload.get("nodes", []):
+        lines.append(
+            f"- `{item['pipeline']}` / `{item['pass']}` / `{item['state']}` / `{item['evidence_type']}`"
+        )
+
+    md_path.write_text("\n".join(lines).rstrip() + "\n")
+
+
+def render_dialect_page(out_root: Path, payload: dict) -> None:
+    site_src = out_root / "reports" / "site_src"
+    md_path = site_src / "dialects" / f"{payload['dialect']}.md"
+
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        f"# {payload['dialect']}",
+        "",
+        "## Ops",
+        "",
+    ]
+
+    for item in payload.get("ops", []):
+        lines.append(f"- `{item['op']}`: {item['summary']}")
+
+    lines.extend(["", "## Pipelines", "",])
+    for pipeline in payload.get("pipelines", []):
+        lines.append(f"- `{pipeline}`")
 
     md_path.write_text("\n".join(lines).rstrip() + "\n")
 

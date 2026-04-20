@@ -23,3 +23,31 @@ def pipeline_dot(payload: dict) -> str:
 
     lines.append("}")
     return "\n".join(lines)
+
+
+def op_dot(payload: dict) -> str:
+    lines = ["digraph op {", '  rankdir="LR";']
+    previous_node = None
+
+    for index, item in enumerate(payload.get("nodes", []), start=1):
+        node_name = f"node_{index}"
+        label = _dot_escape(
+            "\n".join(
+                [
+                    str(item["pipeline"]),
+                    str(item["pass"]),
+                    str(item["state"]),
+                    str(item["evidence_type"]),
+                ]
+            )
+        ).replace("\n", "\\n")
+        url = _dot_escape(f"../pipelines/{item['pipeline']}.html")
+        lines.append(
+            f'  {node_name} [label="{label}", URL="{url}", target="_top"];'
+        )
+        if previous_node is not None:
+            lines.append(f"  {previous_node} -> {node_name};")
+        previous_node = node_name
+
+    lines.append("}")
+    return "\n".join(lines)
