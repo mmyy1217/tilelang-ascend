@@ -1,0 +1,28 @@
+{
+  "changed_files": [
+    "3rdparty/AscendNPU-IR-Dev/bishengir/lib/Dialect/HIVM/Pipelines/HIVMPipelines.cpp",
+    "3rdparty/AscendNPU-IR-Dev/bishengir/lib/Dialect/HFusion/Transforms/ConvertHFusionToHIVM.cpp"
+  ],
+  "file_index": {
+    "3rdparty/AscendNPU-IR-Dev/bishengir/lib/Dialect/HIVM/Pipelines/HIVMPipelines.cpp": {
+      "dialects": [
+        "hivm"
+      ],
+      "ops": [],
+      "pipelines": [
+        "convert-to-hivm-pipeline"
+      ]
+    },
+    "3rdparty/AscendNPU-IR-Dev/bishengir/lib/Dialect/HFusion/Transforms/ConvertHFusionToHIVM.cpp": {
+      "dialects": [
+        "hfusion"
+      ],
+      "ops": [
+        "hfusion.matmul"
+      ],
+      "pipelines": [
+        "convert-to-hivm-pipeline"
+      ]
+    }
+  }
+}

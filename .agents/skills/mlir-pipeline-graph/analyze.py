@@ -49,6 +49,13 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:
         return int(exc.code)
 
+    if args.command in {"update", "commit", "pr"}:
+        repo = Path(args.repo).resolve()
+        (repo / ".agent_pipelines" / "cache" / "latest" / "diffs").mkdir(
+            parents=True, exist_ok=True
+        )
+        return 0
+
     if args.command != "full":
         return 0
 

@@ -232,6 +232,26 @@ def test_non_full_commands_preserve_existing_latest_cache(
     assert not (repo / ".agent_pipelines" / "cache" / "latest" / "manifest.json").exists()
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["analyze.py", "update", "--repo", "{repo}"],
+        ["analyze.py", "commit", "--repo", "{repo}", "--ref", "HEAD"],
+        ["analyze.py", "pr", "--repo", "{repo}", "--id", "123"],
+    ],
+)
+def test_update_commit_and_pr_create_latest_diffs_dir(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    exit_code = main([part.format(repo=str(repo)) for part in argv])
+
+    assert exit_code == 0
+    assert (repo / ".agent_pipelines" / "cache" / "latest" / "diffs").is_dir()
+
+
 def test_pass_command_requires_flag(tmp_path: Path) -> None:
     exit_code = main(["analyze.py", "pass", "--repo", str(tmp_path)])
 
