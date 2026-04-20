@@ -74,7 +74,13 @@ def build_site(site_root: Path) -> None:
 
     site_root.mkdir(parents=True, exist_ok=True)
     shutil.copy2(template_root / "package.json", site_root / "package.json")
-    shutil.copytree(docs_root, site_root, dirs_exist_ok=True)
+
+    def ignore_index_mdoc(src: str, names: list[str]) -> set[str]:
+        if Path(src) == docs_root and (site_root / "index.md").exists():
+            return {"index.md"}
+        return set()
+
+    shutil.copytree(docs_root, site_root, dirs_exist_ok=True, ignore=ignore_index_mdoc)
 
     subprocess.run(["npm", "install"], cwd=site_root, check=True)
     subprocess.run(["npm", "run", "build"], cwd=site_root, check=True)
