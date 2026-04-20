@@ -57,6 +57,9 @@ def validate_pass_research(payload: dict) -> dict:
 
 
 def validate_pipeline_research(payload: dict) -> dict:
+    if not isinstance(payload, Mapping):
+        raise ValidationError("pipeline research payload must be a mapping")
+
     require_keys(payload, ["pipeline", "passes", "helpers"])
 
     passes = payload["passes"]

@@ -31,11 +31,8 @@ def test_promote_json_copies_staged_payload(tmp_path: Path) -> None:
     assert target.parent.is_dir()
 
 
-def test_promote_pipeline_research_rejects_pass_without_example_or_fallback(
-    tmp_path: Path,
-) -> None:
+def test_promote_pipeline_research_promotes_valid_example_payload(tmp_path: Path) -> None:
     from analyze import promote_pipeline_research
-    from validators import ValidationError
 
     staged = tmp_path / "_staging" / "research" / "pipeline.json"
     target = tmp_path / "cache" / "latest" / "research" / "pipeline.json"
@@ -50,6 +47,14 @@ def test_promote_pipeline_research_rejects_pass_without_example_or_fallback(
                         "summary": "Erase annotation.mark ops.",
                         "key_options": [],
                         "dialects_touched": ["annotation"],
+                        "example": {
+                            "test_path": "test/Dialect/Annotation/annotation-lowering.mlir",
+                            "run_line": "// RUN: bishengir-opt %s -annotation-lowering | FileCheck %s",
+                            "input_ir": "func.func @main() { annotation.mark }",
+                            "output_ir": "func.func @main() { return }",
+                            "check_lines": ["// CHECK-NOT: annotation.mark"],
+                            "evidence_type": "test",
+                        },
                     }
                 ],
                 "helpers": [],
@@ -57,10 +62,46 @@ def test_promote_pipeline_research_rejects_pass_without_example_or_fallback(
         )
     )
 
-    with pytest.raises(ValidationError) as excinfo:
-        promote_pipeline_research(staged, target)
+    promote_pipeline_research(staged, target)
 
-    assert "example" in str(excinfo.value)
+    assert json.loads(target.read_text())["passes"][0]["example"]["evidence_type"] == "test"
+
+
+def test_promote_pipeline_research_promotes_explicit_fallback_payload(
+    tmp_path: Path,
+) -> None:
+    from analyze import promote_pipeline_research
+
+    staged = tmp_path / "_staging" / "research" / "pipeline.json"
+    target = tmp_path / "cache" / "latest" / "research" / "pipeline.json"
+    staged.parent.mkdir(parents=True)
+    staged.write_text(
+        json.dumps(
+            {
+                "pipeline": "convert-to-hivm-pipeline",
+                "passes": [
+                    {
+                        "flag": "annotation-lowering",
+                        "summary": "Erase annotation.mark ops.",
+                        "key_options": [],
+                        "dialects_touched": ["annotation"],
+                        "example": None,
+                        "example_missing_reason": "No standalone regression test is available yet.",
+                        "fallback_evidence": {
+                            "notes": ["Observed in downstream pipeline trace"],
+                        },
+                    }
+                ],
+                "helpers": [],
+            }
+        )
+    )
+
+    promote_pipeline_research(staged, target)
+
+    promoted = json.loads(target.read_text())
+    assert promoted["passes"][0]["example"] is None
+    assert promoted["passes"][0]["example_missing_reason"] == "No standalone regression test is available yet."
 
 
 @pytest.mark.parametrize(

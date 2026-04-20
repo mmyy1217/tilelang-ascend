@@ -1,4 +1,6 @@
-from validators import ValidationError, validate_pass_research
+import pytest
+
+from validators import ValidationError, validate_pass_research, validate_pipeline_research
 
 
 def test_validate_pass_research_accepts_test_backed_example():
@@ -76,8 +78,6 @@ def test_validate_pass_research_rejects_placeholder_fallback():
 
 
 def test_validate_pipeline_research_rejects_missing_helpers_key():
-    from validators import validate_pipeline_research
-
     record = {
         "pipeline": "convert-to-hivm-pipeline",
         "passes": [],
@@ -89,3 +89,10 @@ def test_validate_pipeline_research_rejects_missing_helpers_key():
         assert "helpers" in str(exc)
     else:
         raise AssertionError("expected ValidationError")
+
+
+def test_validate_pipeline_research_rejects_non_mapping_payload():
+    with pytest.raises(ValidationError) as excinfo:
+        validate_pipeline_research(None)
+
+    assert "mapping" in str(excinfo.value)
