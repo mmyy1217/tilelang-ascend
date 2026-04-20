@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
+import re
 from pathlib import Path
 
 from cache import initialize_latest_snapshot
@@ -57,14 +58,7 @@ def _load_latest_file_index(repo: Path) -> dict[str, dict[str, list[str]]]:
 
 
 def _write_diff_report(repo: Path, command: str, *git_args: str) -> None:
-    try:
-        changed_files_text = git_output(repo, *git_args)
-    except subprocess.CalledProcessError as exc:
-        error_text = f"{exc.stderr or ''}\n{exc.stdout or ''}".lower()
-        if "not a git repository" in error_text:
-            changed_files_text = ""
-        else:
-            raise
+    changed_files_text = git_output(repo, *git_args)
     changed_files = [line for line in changed_files_text.splitlines() if line]
     file_index = _load_latest_file_index(repo)
     mapped = map_changed_files_to_objects(changed_files, file_index)
@@ -73,6 +67,15 @@ def _write_diff_report(repo: Path, command: str, *git_args: str) -> None:
     report_path = repo / ".agent_pipelines" / "cache" / "latest" / "diffs" / DIFF_REPORT_NAMES[command]
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True))
+
+
+def _normalize_pr_selector(args: argparse.Namespace) -> str:
+    if args.id is not None:
+        selector = args.id
+    else:
+        match = re.search(r"/pr/(\d+)(?:/)?$", args.url)
+        selector = match.group(1) if match is not None else args.url.rsplit("/", 1)[-1]
+    return f"refs/pull/{selector}/head"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -101,8 +104,13 @@ def main(argv: list[str] | None = None) -> int:
                     args.ref,
                 )
             else:
-                selector = args.id if args.id is not None else args.url
-                _write_diff_report(repo, args.command, "diff", "--name-only", selector)
+                _write_diff_report(
+                    repo,
+                    args.command,
+                    "diff",
+                    "--name-only",
+                    _normalize_pr_selector(args),
+                )
         except subprocess.CalledProcessError:
             return 1
         return 0
