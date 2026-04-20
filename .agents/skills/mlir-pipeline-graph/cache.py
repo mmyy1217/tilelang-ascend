@@ -11,7 +11,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def create_snapshot_id(base_commit: str) -> str:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     return f"{timestamp}-{base_commit[:7]}"
 
 
@@ -24,6 +24,11 @@ def initialize_latest_snapshot(
     analysis_mode: str,
 ) -> dict:
     latest_root = out_root / "cache" / "latest"
+    if latest_root.exists():
+        if latest_root.is_dir():
+            shutil.rmtree(latest_root)
+        else:
+            latest_root.unlink()
     for relative in ("index", "research", "diffs", "git"):
         (latest_root / relative).mkdir(parents=True, exist_ok=True)
 
