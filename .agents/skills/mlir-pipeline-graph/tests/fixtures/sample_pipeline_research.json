@@ -1,0 +1,24 @@
+{
+  "helpers": [],
+  "passes": [
+    {
+      "dialects_touched": [
+        "annotation"
+      ],
+      "example": {
+        "check_lines": [
+          "// CHECK-NOT: annotation.mark"
+        ],
+        "evidence_type": "test",
+        "input_ir": "func.func @main() { annotation.mark }",
+        "output_ir": "func.func @main() { return }",
+        "run_line": "// RUN: bishengir-opt %s -annotation-lowering | FileCheck %s",
+        "test_path": "test/Dialect/Annotation/annotation-lowering.mlir"
+      },
+      "flag": "annotation-lowering",
+      "key_options": [],
+      "summary": "Erase annotation.mark ops."
+    }
+  ],
+  "pipeline": "convert-to-hivm-pipeline"
+}
