@@ -31,9 +31,6 @@ def build_parser() -> argparse.ArgumentParser:
             command_parser.add_argument("--name", required=True)
         elif command == "pass":
             command_parser.add_argument("--flag", required=True)
-        else:
-            command_parser.add_argument("--name")
-            command_parser.add_argument("--flag")
 
     return parser
 

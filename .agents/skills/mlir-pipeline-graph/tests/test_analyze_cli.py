@@ -68,6 +68,26 @@ def test_full_command_builds_latest_manifest(tmp_path: Path) -> None:
     assert (repo / ".agent_pipelines" / "cache" / "latest" / "manifest.json").exists()
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["analyze.py", "full", "--repo", "{repo}", "--name", "x"],
+        ["analyze.py", "full", "--repo", "{repo}", "--flag", "x"],
+        ["analyze.py", "update", "--repo", "{repo}", "--name", "x"],
+        ["analyze.py", "update", "--repo", "{repo}", "--flag", "x"],
+    ],
+)
+def test_full_and_update_reject_command_specific_selectors(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    exit_code = main([part.format(repo=str(repo)) for part in argv])
+
+    assert exit_code == 2
+
+
 @pytest.mark.parametrize("command", ["pipeline", "dialect", "op"])
 def test_pipeline_family_commands_require_name(tmp_path: Path, command: str) -> None:
     repo = tmp_path / f"repo_{command}"
