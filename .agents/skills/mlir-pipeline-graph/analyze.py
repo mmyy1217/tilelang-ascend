@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 import sys
 from pathlib import Path
 
 from cache import initialize_latest_snapshot
+from git_tools import git_output, map_changed_files_to_objects
 from research import promote_pipeline_research as promote_pipeline_research_impl
 
 
 COMMANDS = ["full", "pipeline", "pass", "dialect", "op", "update", "commit", "pr"]
+
+DIFF_REPORT_NAMES = {
+    "update": "update.json",
+    "commit": "commit.json",
+    "pr": "pr.json",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,6 +49,28 @@ def promote_pipeline_research(staged: Path, target: Path) -> None:
     promote_pipeline_research_impl(staged, target)
 
 
+def _load_latest_file_index(repo: Path) -> dict[str, dict[str, list[str]]]:
+    index_path = repo / ".agent_pipelines" / "cache" / "latest" / "index" / "files.json"
+    if not index_path.exists():
+        return {}
+    return json.loads(index_path.read_text())
+
+
+def _write_diff_report(repo: Path, command: str) -> None:
+    try:
+        changed_files_text = git_output(repo, "diff", "--name-only")
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        changed_files_text = ""
+    changed_files = [line for line in changed_files_text.splitlines() if line]
+    file_index = _load_latest_file_index(repo)
+    mapped = map_changed_files_to_objects(changed_files, file_index)
+    report = {"changed_files": changed_files, **mapped}
+
+    report_path = repo / ".agent_pipelines" / "cache" / "latest" / "diffs" / DIFF_REPORT_NAMES[command]
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args_list = sys.argv[1:] if argv is None else argv[1:]
@@ -51,9 +82,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command in {"update", "commit", "pr"}:
         repo = Path(args.repo).resolve()
-        (repo / ".agent_pipelines" / "cache" / "latest" / "diffs").mkdir(
-            parents=True, exist_ok=True
-        )
+        if not repo.is_dir():
+            return 1
+        _write_diff_report(repo, args.command)
         return 0
 
     if args.command != "full":
