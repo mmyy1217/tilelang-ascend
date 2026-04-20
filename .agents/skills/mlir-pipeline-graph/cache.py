@@ -24,7 +24,8 @@ def initialize_latest_snapshot(
     analysis_mode: str,
 ) -> dict:
     latest_root = out_root / "cache" / "latest"
-    (latest_root / "index").mkdir(parents=True, exist_ok=True)
+    for relative in ("index", "research", "diffs", "git"):
+        (latest_root / relative).mkdir(parents=True, exist_ok=True)
 
     manifest = {
         "analysis_mode": analysis_mode,
@@ -48,6 +49,6 @@ def archive_latest_snapshot(out_root: Path) -> Path:
     archive_root = history_root / snapshot_id
 
     if archive_root.exists():
-        shutil.rmtree(archive_root)
+        raise FileExistsError(f"snapshot already archived: {archive_root}")
     shutil.copytree(latest_root, archive_root)
     return archive_root
