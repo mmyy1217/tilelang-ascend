@@ -177,6 +177,177 @@ def test_full_command_builds_latest_manifest(tmp_path: Path) -> None:
     assert (repo / ".agent_pipelines" / "cache" / "latest" / "manifest.json").exists()
 
 
+def test_full_command_generates_real_pipeline_research_and_file_index(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def fake_git_metadata(repo_path: Path) -> tuple[str, str, str, str]:
+        return ("abcdef123456", "tree123456", "main", "origin")
+
+    def fake_run_extract(repo_path: Path, out_root: Path) -> int:
+        bishengir_root = repo_path / "3rdparty" / "AscendNPU-IR-Dev" / "bishengir"
+        test_root = bishengir_root / "test" / "Dialect" / "Demo"
+        test_root.mkdir(parents=True, exist_ok=True)
+        (test_root / "demo-pass.mlir").write_text(
+            "\n".join(
+                [
+                    "// RUN: bishengir-opt %s -demo-pass | FileCheck %s",
+                    "func.func @main() {",
+                    "  return",
+                    "}",
+                    "// CHECK: func.func @main()",
+                ]
+            )
+            + "\n"
+        )
+
+        skeleton = {
+            "schema_version": 1,
+            "bishengir_root": "3rdparty/AscendNPU-IR-Dev/bishengir",
+            "passes": [
+                {
+                    "flag": "demo-pass",
+                    "summary": "Run the demo lowering pass.",
+                    "description": "",
+                    "options": [{"flag": "demo-option"}],
+                    "dependent_dialects": ["demo"],
+                    "constructor_fn": "createDemoPass",
+                    "td_file": str(
+                        repo_path
+                        / "3rdparty"
+                        / "AscendNPU-IR-Dev"
+                        / "bishengir"
+                        / "include"
+                        / "bishengir"
+                        / "Transforms"
+                        / "Passes.td"
+                    ),
+                    "td_line": 12,
+                }
+            ],
+            "builders": [
+                {
+                    "name": "buildDemoPipeline",
+                    "file": str(
+                        repo_path
+                        / "3rdparty"
+                        / "AscendNPU-IR-Dev"
+                        / "bishengir"
+                        / "lib"
+                        / "Transforms"
+                        / "DemoPipeline.cpp"
+                    ),
+                    "line": 3,
+                    "steps": [
+                        {
+                            "kind": "pass",
+                            "flag": "demo-pass",
+                            "constructor_fn": "createDemoPass",
+                            "conditions": ["ENABLE_DEMO"],
+                            "line": 4,
+                            "nested_op": None,
+                            "target": None,
+                            "target_namespace": None,
+                            "label": None,
+                        }
+                    ],
+                    "is_pipeline": True,
+                    "pipeline_name": "demo-pipeline",
+                    "pipeline_desc": "Demo pipeline",
+                    "options_class": None,
+                }
+            ],
+            "pipelines": [
+                {
+                    "name": "demo-pipeline",
+                    "desc": "Demo pipeline",
+                    "options_class": None,
+                    "file": str(
+                        repo_path
+                        / "3rdparty"
+                        / "AscendNPU-IR-Dev"
+                        / "bishengir"
+                        / "lib"
+                        / "Transforms"
+                        / "RegisterPipelines.cpp"
+                    ),
+                    "line": 20,
+                    "steps": [
+                        {
+                            "kind": "helper_call",
+                            "conditions": [],
+                            "line": 21,
+                            "target": "buildDemoPipeline",
+                            "target_namespace": None,
+                            "label": None,
+                            "constructor_fn": None,
+                            "flag": None,
+                            "nested_op": None,
+                        }
+                    ],
+                }
+            ],
+            "coverage": {},
+        }
+        out_root.mkdir(parents=True, exist_ok=True)
+        (out_root / "skeleton.json").write_text(json.dumps(skeleton))
+        (out_root / "coverage.json").write_text(json.dumps({}))
+        return 0
+
+    monkeypatch.setattr("analyze._git_metadata", fake_git_metadata, raising=False)
+    monkeypatch.setattr("analyze._run_extract", fake_run_extract, raising=False)
+
+    exit_code = main(["analyze.py", "full", "--repo", str(repo)])
+
+    assert exit_code == 0
+    manifest = json.loads(
+        (repo / ".agent_pipelines" / "cache" / "latest" / "manifest.json").read_text()
+    )
+    pipeline_payload = json.loads(
+        (
+            repo
+            / ".agent_pipelines"
+            / "cache"
+            / "latest"
+            / "research"
+            / "pipelines"
+            / "demo-pipeline.json"
+        ).read_text()
+    )
+    dialect_payload = json.loads(
+        (
+            repo
+            / ".agent_pipelines"
+            / "cache"
+            / "latest"
+            / "research"
+            / "dialects"
+            / "demo.json"
+        ).read_text()
+    )
+    file_index = json.loads(
+        (
+            repo
+            / ".agent_pipelines"
+            / "cache"
+            / "latest"
+            / "index"
+            / "files.json"
+        ).read_text()
+    )
+
+    assert manifest["base_commit"] == "abcdef123456"
+    assert pipeline_payload["pipeline"] == "demo-pipeline"
+    assert pipeline_payload["passes"][0]["flag"] == "demo-pass"
+    assert pipeline_payload["passes"][0]["example"]["evidence_type"] == "test"
+    assert pipeline_payload["passes"][0]["conditions"] == ["ENABLE_DEMO"]
+    assert dialect_payload["dialect"] == "demo"
+    assert dialect_payload["pipelines"] == ["demo-pipeline"]
+    assert any("RegisterPipelines.cpp" in path for path in file_index)
+
+
 @pytest.mark.parametrize(
     "argv",
     [

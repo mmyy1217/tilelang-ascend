@@ -1,9 +1,10 @@
 import json
+from importlib import import_module
 from dataclasses import asdict
 from pathlib import Path
 
 from models import OpLoweringNode, OpLoweringPage
-from render import build_site, render_dialect_page, render_op_page, render_pipeline_page
+from render import build_site, render_dialect_page, render_index_page, render_op_page, render_pipeline_page
 
 
 def test_render_pipeline_page_writes_markdown_and_dot(tmp_path: Path):
@@ -171,6 +172,27 @@ def test_build_site_materializes_vitepress_template(monkeypatch, tmp_path: Path)
     assert (tmp_path / "index.md").exists()
 
 
+def test_build_site_copies_generated_site_src_content(monkeypatch, tmp_path: Path):
+    def fake_run(cmd, cwd, check):
+        return None
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    reports_root = tmp_path.parent
+    site_src = reports_root / "site_src"
+    generated_page = site_src / "pipelines" / "convert-to-hivm-pipeline.md"
+    generated_graph = site_src / "public" / "graphs" / "convert-to-hivm-pipeline.dot"
+    generated_page.parent.mkdir(parents=True, exist_ok=True)
+    generated_graph.parent.mkdir(parents=True, exist_ok=True)
+    generated_page.write_text("# convert-to-hivm-pipeline\n")
+    generated_graph.write_text("digraph G {}\n")
+
+    build_site(tmp_path)
+
+    assert (tmp_path / "pipelines" / "convert-to-hivm-pipeline.md").exists()
+    assert (tmp_path / "public" / "graphs" / "convert-to-hivm-pipeline.dot").exists()
+
+
 def test_build_site_preserves_existing_generated_index(monkeypatch, tmp_path: Path):
     def fake_run(cmd, cwd, check):
         return None
@@ -265,3 +287,201 @@ def test_render_dialect_page_writes_aggregate_index(tmp_path: Path):
     assert "- `hfusion.reduce`: Lowered through reduction decomposition." in md
     assert "- `convert-to-hivm-pipeline`" in md
     assert "- `legalize-hivm-pipeline`" in md
+
+
+def test_render_index_page_links_generated_content(tmp_path: Path):
+    out_root = tmp_path / ".agent_pipelines"
+    site_src = out_root / "reports" / "site_src"
+    (site_src / "pipelines").mkdir(parents=True, exist_ok=True)
+    (site_src / "dialects").mkdir(parents=True, exist_ok=True)
+    (site_src / "ops").mkdir(parents=True, exist_ok=True)
+    (site_src / "pipelines" / "convert-to-hivm-pipeline.md").write_text("# pipeline\n")
+    (site_src / "dialects" / "hfusion.md").write_text("# dialect\n")
+    (site_src / "ops" / "hfusion.matmul.md").write_text("# op\n")
+
+    render_index_page(out_root)
+
+    index_md = (site_src / "index.md").read_text()
+    assert "./pipelines/convert-to-hivm-pipeline.md" in index_md
+    assert "./dialects/hfusion.md" in index_md
+    assert "./ops/hfusion.matmul.md" in index_md
+
+
+def test_build_site_tree_materializes_full_site_from_cached_research(
+    monkeypatch, tmp_path: Path
+):
+    def fake_run(cmd, cwd, check):
+        return None
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    out_root = tmp_path / ".agent_pipelines"
+    latest = out_root / "cache" / "latest" / "research"
+    (latest / "pipelines").mkdir(parents=True, exist_ok=True)
+    (latest / "ops").mkdir(parents=True, exist_ok=True)
+    (latest / "dialects").mkdir(parents=True, exist_ok=True)
+
+    (latest / "pipelines" / "convert-to-hivm-pipeline.json").write_text(
+        json.dumps(
+            {
+                "pipeline": "convert-to-hivm-pipeline",
+                "passes": [
+                    {
+                        "flag": "convert-to-hivm-op",
+                        "summary": "Convert ops to hivm.",
+                        "key_options": [],
+                        "dialects_touched": ["hivm"],
+                        "example": {
+                            "test_path": "test/Dialect/HIVM/convert.mlir",
+                            "run_line": "// RUN: bishengir-opt %s -convert-to-hivm-op | FileCheck %s",
+                            "input_ir": "func.func @main() { return }",
+                            "output_ir": "func.func @main() { return }",
+                            "check_lines": ["// CHECK: func.func @main"],
+                            "evidence_type": "test",
+                        },
+                    }
+                ],
+                "helpers": [],
+            }
+        )
+    )
+    (latest / "ops" / "hfusion.matmul.json").write_text(
+        json.dumps(
+            {
+                "op": "hfusion.matmul",
+                "dialect": "hfusion",
+                "nodes": [
+                    {
+                        "pipeline": "convert-to-hivm-pipeline",
+                        "pass": "convert-hfusion-to-hivm",
+                        "state": "rewritten",
+                        "evidence_type": "implementation",
+                    }
+                ],
+            }
+        )
+    )
+    (latest / "dialects" / "hfusion.json").write_text(
+        json.dumps(
+            {
+                "dialect": "hfusion",
+                "ops": [
+                    {
+                        "op": "hfusion.matmul",
+                        "summary": "Lowered through hivm legalization.",
+                    }
+                ],
+                "pipelines": ["convert-to-hivm-pipeline"],
+            }
+        )
+    )
+
+    from render import build_site_tree
+
+    site_root = build_site_tree(out_root)
+
+    assert site_root == out_root / "reports" / "site"
+    assert (
+        out_root / "reports" / "site_src" / "pipelines" / "convert-to-hivm-pipeline.md"
+    ).exists()
+    assert (out_root / "reports" / "site_src" / "ops" / "hfusion.matmul.md").exists()
+    assert (out_root / "reports" / "site_src" / "dialects" / "hfusion.md").exists()
+    assert (out_root / "reports" / "site_src" / "index.md").exists()
+    assert (site_root / "package.json").exists()
+    assert (site_root / ".vitepress" / "config.mts").exists()
+    assert (site_root / "index.md").exists()
+    assert (site_root / "pipelines" / "convert-to-hivm-pipeline.md").exists()
+    assert (site_root / "ops" / "hfusion.matmul.md").exists()
+    assert (site_root / "dialects" / "hfusion.md").exists()
+
+
+def test_build_site_tree_clears_stale_generated_content(monkeypatch, tmp_path: Path):
+    def fake_run(cmd, cwd, check):
+        return None
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    out_root = tmp_path / ".agent_pipelines"
+    latest = out_root / "cache" / "latest" / "research"
+    (latest / "pipelines").mkdir(parents=True, exist_ok=True)
+    (latest / "ops").mkdir(parents=True, exist_ok=True)
+    (latest / "dialects").mkdir(parents=True, exist_ok=True)
+    (latest / "pipelines" / "convert-to-hivm-pipeline.json").write_text(
+        json.dumps({"pipeline": "convert-to-hivm-pipeline", "passes": [], "helpers": []})
+    )
+
+    stale_src = out_root / "reports" / "site_src" / "ops" / "stale.md"
+    stale_site = out_root / "reports" / "site" / "ops" / "stale.md"
+    stale_src.parent.mkdir(parents=True, exist_ok=True)
+    stale_site.parent.mkdir(parents=True, exist_ok=True)
+    stale_src.write_text("stale\n")
+    stale_site.write_text("stale\n")
+
+    from render import build_site_tree
+
+    build_site_tree(out_root)
+
+    assert not stale_src.exists()
+    assert not stale_site.exists()
+    assert (out_root / "reports" / "site" / "pipelines" / "convert-to-hivm-pipeline.md").exists()
+
+
+def test_render_main_build_command_builds_full_site(monkeypatch, tmp_path: Path):
+    def fake_run(cmd, cwd, check):
+        return None
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    repo = tmp_path / "repo"
+    out_root = repo / ".agent_pipelines"
+    latest = out_root / "cache" / "latest" / "research" / "pipelines"
+    latest.mkdir(parents=True, exist_ok=True)
+    (latest / "convert-to-hivm-pipeline.json").write_text(
+        json.dumps({"pipeline": "convert-to-hivm-pipeline", "passes": [], "helpers": []})
+    )
+
+    render_mod = import_module("render")
+    exit_code = render_mod.main(["render.py", "build", "--repo", str(repo)])
+
+    assert exit_code == 0
+    assert (
+        out_root / "reports" / "site_src" / "pipelines" / "convert-to-hivm-pipeline.md"
+    ).exists()
+    assert (out_root / "reports" / "site" / "package.json").exists()
+    assert (
+        out_root / "reports" / "site" / "pipelines" / "convert-to-hivm-pipeline.md"
+    ).exists()
+
+
+def test_render_main_demo_command_seeds_research_and_builds_site(
+    monkeypatch, tmp_path: Path
+):
+    def fake_run(cmd, cwd, check):
+        return None
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    render_mod = import_module("render")
+    exit_code = render_mod.main(["render.py", "demo", "--repo", str(repo)])
+
+    out_root = repo / ".agent_pipelines"
+
+    assert exit_code == 0
+    assert (
+        out_root
+        / "cache"
+        / "latest"
+        / "research"
+        / "pipelines"
+        / "convert-to-hivm-pipeline.json"
+    ).exists()
+    assert (
+        out_root / "reports" / "site_src" / "pipelines" / "convert-to-hivm-pipeline.md"
+    ).exists()
+    assert (out_root / "reports" / "site" / "package.json").exists()
+    assert (
+        out_root / "reports" / "site" / "pipelines" / "convert-to-hivm-pipeline.md"
+    ).exists()
